@@ -1,0 +1,16 @@
+.env
+.cursor/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.xlsx
+*.egg-info/
+dist/
+build/
+.idea/
+.vscode/
+*.log
+*.db
+data/

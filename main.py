@@ -1,0 +1,382 @@
+"""Longlist — FastAPI application with 3 webhook endpoints."""
+from __future__ import annotations
+
+import logging
+import os
+import uuid
+from contextlib import asynccontextmanager
+from typing import Annotated, Any
+
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
+
+import job_store
+from admin_auth import require_admin
+from agentmail_client import reply_to_thread
+from agentmail_inbound import (
+    extract_inbound_email_fields,
+    verify_and_parse_agentmail_body,
+)
+from briefing_parser import parse_briefing
+from email_writer import write_delivery_email, write_preview_email
+from pipeline import run_pipeline
+from preview_search import run_preview_search
+from stripe_handler import create_checkout_sessions, verify_webhook
+from telegram_notify import notify_error, notify_qa_ready
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger("longlist.main")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    job_store.init_db()
+    from config import LONGLIST_ADMIN_TOKEN
+
+    if not LONGLIST_ADMIN_TOKEN:
+        logger.warning(
+            "LONGLIST_ADMIN_TOKEN is not set — /jobs and /webhook/manual are open "
+            "(set the token in production)"
+        )
+    yield
+
+
+# ---------------------------------------------------------------------------
+# FastAPI App
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="Longlist",
+    description="Email-based Research-as-a-Service for German M&A advisors",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
+@app.get("/")
+async def health():
+    """Health check endpoint."""
+    return {
+        "status": "ok",
+        "service": "longlist",
+        "jobs_persisted": job_store.count_jobs(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1. AgentMail Webhook — incoming email
+# ---------------------------------------------------------------------------
+@app.post("/webhook/agentmail")
+async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Receives incoming emails from AgentMail.
+    Flow: Parse briefing → Preview search → Reply with payment links.
+    """
+    raw_body = await request.body()
+    payload, err = verify_and_parse_agentmail_body(raw_body, request.headers)
+    if err:
+        logger.error("AgentMail webhook rejected: %s", err)
+        return JSONResponse({"status": "error", "detail": err}, status_code=400)
+
+    if payload.get("_longlist_ignore_event"):
+        return {"status": "ignored", "reason": payload.get("event_type")}
+
+    sender, subject, body, thread_id = extract_inbound_email_fields(payload)
+
+    logger.info("Incoming email from %s: %s", sender, subject)
+
+    job_id = str(uuid.uuid4())[:8]
+    job_store.put_job(
+        job_id,
+        {
+            "status": "parsing",
+            "sender": sender,
+            "subject": subject,
+            "thread_id": thread_id,
+        },
+    )
+
+    background_tasks.add_task(process_incoming_email, job_id, sender, subject, body, thread_id)
+
+    return {"status": "accepted", "job_id": job_id}
+
+
+async def process_incoming_email(
+    job_id: str,
+    sender: str,
+    subject: str,
+    body: str,
+    thread_id: str,
+):
+    """Background task: parse briefing, run preview, send offer email."""
+    try:
+        parsed = await parse_briefing(sender=sender, subject=subject, body=body)
+        job_store.merge_job(
+            job_id,
+            {"parsed": parsed, "status": "parsed", "service_type": parsed.get("service_type")},
+        )
+
+        if parsed.get("needs_clarification"):
+            question = parsed.get(
+                "clarification_question",
+                "Können Sie Ihre Anfrage bitte präzisieren?",
+            )
+            if thread_id:
+                await reply_to_thread(
+                    thread_id=thread_id,
+                    to_email=sender,
+                    body_html=f"<p>{question}</p><p>Mit freundlichen Grüßen<br>Max Zwisler<br>Longlist Research</p>",
+                    body_text=question,
+                )
+            job_store.merge_job(job_id, {"status": "awaiting_clarification"})
+            return
+
+        service_type = parsed["service_type"]
+
+        total_companies = 0
+        preview_names: list[str] = []
+
+        if service_type == "longlist":
+            preview = run_preview_search(
+                query=parsed.get("query", ""),
+                filters=parsed.get("filters"),
+                location=parsed.get("location"),
+                per_page=5,
+            )
+            total_companies = preview["total"]
+            preview_names = [c["name"] for c in preview["preview_companies"]]
+            job_store.merge_job(job_id, {"preview": preview})
+
+        elif service_type == "enrichment":
+            company_list = parsed.get("company_list", [])
+            total_companies = len(company_list) if company_list else 0
+            preview_names = (company_list or [])[:5]
+
+        job_store.merge_job(
+            job_id,
+            {"total_companies": total_companies, "status": "preview_done"},
+        )
+
+        payment_urls = create_checkout_sessions(
+            job_id=job_id,
+            service_type=service_type,
+            customer_email=sender,
+        )
+        job_store.merge_job(job_id, {"payment_urls": payment_urls})
+
+        email_body = await write_preview_email(
+            total_companies=total_companies,
+            preview_names=preview_names,
+            search_summary=parsed.get("notes", subject),
+            payment_urls=payment_urls,
+            service_type=service_type,
+        )
+
+        email_html = email_body.replace("\n", "<br>")
+
+        if thread_id:
+            await reply_to_thread(
+                thread_id=thread_id,
+                to_email=sender,
+                body_html=email_html,
+                body_text=email_body,
+            )
+
+        job_store.merge_job(job_id, {"status": "offer_sent"})
+        logger.info(
+            "Job %s: Offer sent to %s (%d companies found)",
+            job_id,
+            sender,
+            total_companies,
+        )
+
+    except Exception as e:
+        logger.exception("Error processing email for job %s: %s", job_id, e)
+        job_store.merge_job(job_id, {"status": "error", "error": str(e)})
+        await notify_error(job_id, str(e))
+
+
+# ---------------------------------------------------------------------------
+# 2. Stripe Webhook — payment completed
+# ---------------------------------------------------------------------------
+@app.post("/webhook/stripe")
+async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Receives Stripe checkout.session.completed events.
+    Triggers the enrichment pipeline.
+    """
+    try:
+        payload = await request.body()
+        sig_header = request.headers.get("stripe-signature", "")
+    except Exception:
+        return JSONResponse({"status": "error"}, status_code=200)
+
+    event_data = verify_webhook(payload, sig_header)
+
+    if event_data is None:
+        return {"status": "ignored"}
+
+    job_id = event_data.get("job_id") or ""
+    package = event_data.get("package", "basis")
+    service_type = event_data.get("service_type", "longlist")
+    session_id = event_data.get("stripe_session_id") or ""
+    if not session_id:
+        logger.error("Stripe checkout.session.completed missing session id")
+        return {"status": "ignored"}
+
+    if not job_store.try_claim_stripe_session(session_id, job_id):
+        return {"status": "duplicate"}
+
+    logger.info("Payment received for job %s: package=%s", job_id, package)
+
+    if job_store.get_job(job_id):
+        job_store.merge_job(job_id, {"status": "paid", "package": package})
+    else:
+        job_store.put_job(
+            job_id,
+            {
+                "status": "paid",
+                "package": package,
+                "service_type": service_type,
+                "sender": event_data.get("customer_email", ""),
+                "parsed": {},
+                "thread_id": "",
+            },
+        )
+
+    background_tasks.add_task(process_payment, job_id, package, service_type, event_data)
+
+    return {"status": "accepted", "job_id": job_id}
+
+
+async def process_payment(
+    job_id: str,
+    package: str,
+    service_type: str,
+    event_data: dict[str, Any],
+):
+    """Background task: run enrichment pipeline, notify QA, send delivery email."""
+    try:
+        job = job_store.get_job(job_id) or {}
+        parsed_briefing = job.get("parsed", {})
+        customer_email = event_data.get("customer_email") or job.get("sender", "")
+        thread_id = job.get("thread_id", "")
+        search_summary = parsed_briefing.get("notes", "")
+
+        job_store.merge_job(job_id, {"status": "enriching"})
+
+        result = await run_pipeline(
+            job_id=job_id,
+            service_type=service_type,
+            package=package,
+            parsed_briefing=parsed_briefing,
+        )
+
+        job_store.merge_job(job_id, {"pipeline_result": result, "status": "enrichment_done"})
+
+        excel_path = result.get("excel_path")
+        enriched_count = result.get("enriched_count", 0)
+
+        if not excel_path:
+            logger.error("No Excel generated for job %s", job_id)
+            await notify_error(job_id, "Pipeline produced no results")
+            return
+
+        await notify_qa_ready(
+            job_id=job_id,
+            customer_email=customer_email,
+            package=package,
+            enriched_count=enriched_count,
+            search_summary=search_summary,
+        )
+
+        delivery_body = await write_delivery_email(
+            enriched_count=enriched_count,
+            package=package,
+            search_summary=search_summary,
+        )
+
+        delivery_html = delivery_body.replace("\n", "<br>")
+        excel_filename = os.path.basename(excel_path)
+
+        if thread_id:
+            await reply_to_thread(
+                thread_id=thread_id,
+                to_email=customer_email,
+                body_html=delivery_html,
+                body_text=delivery_body,
+                attachment_path=excel_path,
+                attachment_name=excel_filename,
+            )
+
+        job_store.merge_job(job_id, {"status": "delivered"})
+        logger.info(
+            "Job %s delivered: %d companies, package %s",
+            job_id,
+            enriched_count,
+            package,
+        )
+
+    except Exception as e:
+        logger.exception("Error in pipeline for job %s: %s", job_id, e)
+        job_store.merge_job(job_id, {"status": "error", "error": str(e)})
+        await notify_error(job_id, str(e))
+
+
+# ---------------------------------------------------------------------------
+# 3. Manual trigger / QA endpoint
+# ---------------------------------------------------------------------------
+@app.post("/webhook/manual")
+async def manual_trigger(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    _admin: Annotated[None, Depends(require_admin)],
+):
+    """
+    Manual trigger for testing: accepts a briefing directly.
+    Body: {"sender": "...", "subject": "...", "body": "...", "thread_id": "..."}
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "detail": "Invalid JSON"}, status_code=400)
+
+    sender = payload.get("sender", "test@example.com")
+    subject = payload.get("subject", "Test Briefing")
+    body = payload.get("body", "")
+    thread_id = payload.get("thread_id", "")
+
+    job_id = str(uuid.uuid4())[:8]
+    job_store.put_job(
+        job_id,
+        {
+            "status": "parsing",
+            "sender": sender,
+            "subject": subject,
+            "thread_id": thread_id,
+        },
+    )
+
+    background_tasks.add_task(process_incoming_email, job_id, sender, subject, body, thread_id)
+
+    return {"status": "accepted", "job_id": job_id}
+
+
+@app.get("/jobs")
+async def list_jobs(_admin: Annotated[None, Depends(require_admin)]):
+    """List all jobs and their current status."""
+    return job_store.list_jobs_summary()
+
+
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str, _admin: Annotated[None, Depends(require_admin)]):
+    """Get full details for a specific job."""
+    job = job_store.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    return job
