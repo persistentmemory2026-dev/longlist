@@ -1,9 +1,11 @@
 """Longlist — Configuration & Environment Variables."""
 import os
 import logging
+
 from dotenv import load_dotenv
 
 load_dotenv()
+load_dotenv(".env.local", override=True)
 
 logger = logging.getLogger("longlist")
 
@@ -19,7 +21,7 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 # --- AgentMail ---
 AGENTMAIL_API_KEY = os.getenv("AGENTMAIL_API_KEY", "")
 AGENTMAIL_WEBHOOK_SECRET = os.getenv("AGENTMAIL_WEBHOOK_SECRET", "")
-AGENTMAIL_FROM = os.getenv("AGENTMAIL_FROM", "briefing@longlist.de")
+AGENTMAIL_FROM = os.getenv("AGENTMAIL_FROM", "briefing-mandatscout@agentmail.to")
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -30,7 +32,7 @@ APP_URL = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "longlist.db")
 LONGLIST_ADMIN_TOKEN = os.getenv("LONGLIST_ADMIN_TOKEN", "")
 
-# Stripe redirect URLs (defaults follow APP_URL; set STRIPE_SUCCESS_URL for longlist.de in prod)
+# Stripe redirect URLs (defaults follow APP_URL; set STRIPE_SUCCESS_URL for longlist.email in prod)
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", f"{APP_URL}/danke")
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", f"{APP_URL}/abgebrochen")
 

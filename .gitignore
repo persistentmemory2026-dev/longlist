@@ -1,4 +1,5 @@
 .env
+.env.local
 .cursor/
 __pycache__/
 *.pyc

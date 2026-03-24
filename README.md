@@ -1,6 +1,6 @@
 # Longlist
 
-Email-only Research-as-a-Service for German M&A advisors: inbound briefing at `briefing@longlist.de`, OpenRegister enrichment, Stripe checkout, Excel delivery via AgentMail. See [BUILD_PROMPT.md](BUILD_PROMPT.md) for the full product spec.
+Email-only Research-as-a-Service for German M&A advisors: inbound briefing at `briefing@longlist.email`, OpenRegister enrichment, Stripe checkout, Excel delivery via AgentMail. See [BUILD_PROMPT.md](BUILD_PROMPT.md) for the full product spec.
 
 ## Requirements
 
