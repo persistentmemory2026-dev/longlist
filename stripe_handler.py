@@ -53,7 +53,7 @@ def create_checkout_sessions(
                 "service_type": service_type,
             },
             invoice_creation={"enabled": True},
-            expires_at=int(time.time()) + 7 * 24 * 3600,  # 7 days
+            expires_at=int(time.time()) + 23 * 3600,  # 23 hours (Stripe test mode max is 24h)
             success_url=STRIPE_SUCCESS_URL,
             cancel_url=STRIPE_CANCEL_URL,
         )

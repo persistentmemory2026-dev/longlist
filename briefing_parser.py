@@ -41,11 +41,8 @@ Gib ein JSON-Objekt zurück mit genau dieser Struktur:
 
 - status: "active" (Standard, immer setzen)
 - legal_form: ag, eg, ek, ev, ewiv, foreign, gbr, ggmbh, gmbh, kg, kgaa, llp, municipal, ohg, se, ug
-- revenue: {"field": "revenue", "min": "500000000"} — Wert in CENTS! €1M = "100000000", €5M = "500000000"
 - employees: {"field": "employees", "min": "50", "max": "500"}
-- balance_sheet_total: min/max in Cents
 - incorporated_at: {"field": "incorporated_at", "max": "2000-01-01"} für "etabliert"
-- capital_amount: min/max in Cents
 - youngest_owner_age: {"field": "youngest_owner_age", "min": "60"} für "GF über 60"
 - has_sole_owner: "true"/"false"
 - has_representative_owner: "true" für "inhabergeführt"
@@ -55,12 +52,11 @@ Gib ein JSON-Objekt zurück mit genau dieser Struktur:
 - city, zip: {"field": "city", "value": "München"}
 - purpose: {"field": "purpose", "value": ["keywords"]}
 
-## Umsatz-Umrechnung (→ Cents)
-- "1 Mio" / "1M" → "100000000"
-- "5 Mio" → "500000000"
-- "10 Mio" → "1000000000"
-- "50 Mio" → "5000000000"
-- "100 Mio" → "10000000000"
+WICHTIG — NICHT als Filter verwenden (Daten zu lückenhaft, führt zu 0 Ergebnissen):
+- revenue (Umsatz) → stattdessen in "notes" erwähnen
+- balance_sheet_total → stattdessen in "notes" erwähnen
+- capital_amount → stattdessen in "notes" erwähnen
+Wenn der Kunde Umsatz-/Finanzkriterien nennt, schreibe sie in die "notes" aber NICHT in die filters.
 
 ## Rechtsform-Mapping
 - "GmbH" → "gmbh"
