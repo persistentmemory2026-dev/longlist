@@ -67,17 +67,25 @@ def _normalize_svix_payload(msg: dict[str, Any]) -> dict[str, Any]:
     return msg
 
 
+def _extract_email(raw: str) -> str:
+    """Extract bare email from 'Name <email>' format or return as-is."""
+    import re
+    match = re.search(r"<([^>]+)>", raw)
+    return match.group(1) if match else raw.strip()
+
+
 def extract_inbound_email_fields(payload: dict[str, Any]) -> tuple[str, str, str, str]:
     """Parse AgentMail-style JSON into sender, subject, body, thread_id."""
     message = payload.get("message") or payload.get("data", {}).get("message") or payload
     if not isinstance(message, dict):
         message = {}
     from_ = message.get("from", {})
-    sender = (
-        from_.get("email")
-        if isinstance(from_, dict)
-        else (from_ if isinstance(from_, str) else "unknown@example.com")
-    )
+    if isinstance(from_, dict):
+        sender = from_.get("email") or _extract_email(from_.get("name", "unknown@example.com"))
+    elif isinstance(from_, str):
+        sender = _extract_email(from_)
+    else:
+        sender = "unknown@example.com"
     subject = message.get("subject", "") or ""
     body = (
         message.get("text")
