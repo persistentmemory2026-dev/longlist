@@ -10,5 +10,6 @@ openregister-sdk @ git+https://github.com/oregister/openregister-python.git
 agentmail>=0.4.12
 pydantic>=2.0.0
 svix>=1.0.0
+tavily-python>=0.5.0
 pytest>=8.0.0
 pytest-asyncio>=0.24.0

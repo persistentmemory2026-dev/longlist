@@ -13,6 +13,7 @@ logger = logging.getLogger("longlist")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENREGISTER_API_KEY = os.getenv("OPENREGISTER_API_KEY", "")
 ANYMAILFINDER_API_KEY = os.getenv("ANYMAILFINDER_API_KEY", "")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 # --- Stripe ---
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
