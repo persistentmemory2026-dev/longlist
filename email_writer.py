@@ -82,7 +82,7 @@ Regeln:
 """
 
     response = await client.messages.create(
-        model="claude-sonnet-4-6-20250131",
+        model="claude-sonnet-4-6",
         max_tokens=1500,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
@@ -117,7 +117,7 @@ Regeln:
 """
 
     response = await client.messages.create(
-        model="claude-sonnet-4-6-20250131",
+        model="claude-sonnet-4-6",
         max_tokens=1000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
