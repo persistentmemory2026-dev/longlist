@@ -182,3 +182,87 @@ async def parse_briefing(
                 parsed["service_type"], parsed["query"], len(parsed["filters"]))
 
     return parsed
+
+
+_ALTERNATIVES_PROMPT = """Die folgende Longlist-Suche hat 0 Treffer ergeben. Schlage 2-3 alternative Suchparameter-Sets vor, die wahrscheinlich Ergebnisse liefern.
+
+Originale Suchparameter:
+- query: {query}
+- filters: {filters}
+- location: {location}
+- Kundenwunsch: {notes}
+
+Strategien (wähle die 2-3 passendsten):
+1. Region erweitern (größerer Radius oder ganz weglassen)
+2. Branchencode ändern oder ergänzen (verwandte WZ-Codes)
+3. Suchbegriff variieren (Synonyme, verwandte Begriffe)
+4. Restriktive Filter lockern (employees, legal_form etc. weglassen)
+5. Filter-Kombination vereinfachen (weniger Filter = mehr Treffer)
+
+WICHTIG:
+- Jede Alternative MUSS sich deutlich von der Original-Suche unterscheiden
+- Jede Alternative braucht einen kurzen deutschen "title" (max 40 Zeichen) für den Button-Text
+- Verwende dasselbe JSON-Schema wie die Original-Suche
+- Immer status: "active" als Filter beibehalten
+- KEINE Finanz-Filter (revenue, balance_sheet_total) — die funktionieren nie
+
+Antworte NUR mit einem JSON-Array:
+```json
+[
+  {{"title": "Kurzer Button-Text", "query": "...", "filters": [...], "location": {{...}} | null}},
+  ...
+]
+```"""
+
+
+async def suggest_search_alternatives(
+    query: str,
+    filters: list[dict[str, Any]],
+    location: dict[str, Any] | None,
+    notes: str,
+) -> list[dict[str, Any]]:
+    """Generate 2-3 alternative search parameter sets when original search returned 0 results."""
+    if not ANTHROPIC_API_KEY:
+        return []
+
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+    user_msg = _ALTERNATIVES_PROMPT.format(
+        query=query,
+        filters=json.dumps(filters, ensure_ascii=False),
+        location=json.dumps(location, ensure_ascii=False) if location else "null (bundesweit)",
+        notes=notes,
+    )
+
+    try:
+        response = await client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2000,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+
+        raw_text = response.content[0].text.strip()
+        if raw_text.startswith("```"):
+            lines = raw_text.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            raw_text = "\n".join(lines)
+
+        alternatives = json.loads(raw_text)
+        if not isinstance(alternatives, list):
+            logger.error("Alternatives response is not a list: %s", raw_text)
+            return []
+
+        # Ensure each alternative has required fields
+        for alt in alternatives:
+            alt.setdefault("query", query)
+            alt.setdefault("filters", [{"field": "status", "value": "active"}])
+            alt.setdefault("location", None)
+            alt.setdefault("title", "Alternative Suche")
+
+        logger.info("Generated %d search alternatives", len(alternatives))
+        return alternatives[:3]
+
+    except Exception as e:
+        logger.error("Failed to generate search alternatives: %s", e)
+        return []

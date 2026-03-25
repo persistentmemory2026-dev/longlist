@@ -242,6 +242,88 @@ def build_preview_email_html(body_plain: str, payment_urls: dict[str, str], tota
     return _email_wrapper(inner)
 
 
+def _retry_button(url: str, title: str, total: int, preview_names: list[str]) -> str:
+    """Single retry-search CTA card with button, result count, and preview names."""
+    safe_href = html.escape(url, quote=True)
+    safe_title = html.escape(title)
+    preview_html = ""
+    if preview_names:
+        names = ", ".join(html.escape(n) for n in preview_names[:3])
+        preview_html = f"""
+    <p style="margin:6px 0 0 0;font-family:{_FONT_BASE};font-size:12px;color:{_TEXT_MUTED};line-height:1.4;">
+      z.B. {names}
+    </p>"""
+
+    return f"""<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+  style="margin-bottom:12px;">
+  <tr><td style="border:1px solid {_BORDER_STRONG};border-radius:10px;padding:16px 20px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+      <tr>
+        <td style="vertical-align:middle;">
+          <p style="margin:0;font-family:{_FONT_BASE};font-size:15px;font-weight:600;color:{_TEXT_MAIN};">
+            {safe_title}
+          </p>
+          <p style="margin:4px 0 0 0;font-family:{_FONT_BASE};font-size:13px;color:{_TEXT_MUTED};">
+            {total} Unternehmen gefunden
+          </p>{preview_html}
+        </td>
+        <td style="vertical-align:middle;text-align:right;width:140px;">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+            <tr><td style="border-radius:8px;background-color:{_BRAND_GREEN};text-align:center;">
+              <a href="{safe_href}" target="_blank" rel="noopener noreferrer"
+                 style="display:block;padding:10px 18px;font-family:{_FONT_BASE};
+                        font-size:13px;font-weight:600;color:{_TEXT_LIGHT};text-decoration:none;">
+                Suche starten
+              </a>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>"""
+
+
+def build_no_results_email_html(
+    body_plain: str,
+    alternatives: list[dict],
+    retry_urls: dict[str, str],
+) -> str:
+    """Branded HTML for no-results email with retry CTA buttons."""
+    prose = plain_paragraphs_to_html(body_plain)
+
+    alt_html = ""
+    if alternatives:
+        buttons = []
+        for i, alt in enumerate(alternatives):
+            key = f"v{i}"
+            url = retry_urls.get(key, "#")
+            buttons.append(_retry_button(
+                url=url,
+                title=alt.get("title", "Alternative Suche"),
+                total=alt.get("total", 0),
+                preview_names=alt.get("preview", []),
+            ))
+
+        alt_html = f"""
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:24px;">
+  <tr><td>
+    <p style="margin:0 0 16px 0;font-family:{_FONT_DISPLAY};font-size:18px;font-weight:700;color:{_TEXT_MAIN};">
+      Alternative Suchen
+    </p>
+    <p style="margin:0 0 16px 0;font-family:{_FONT_BASE};font-size:14px;color:{_TEXT_MUTED};">
+      Wir haben automatisch verwandte Suchen getestet. Per Klick starten Sie eine neue Recherche:
+    </p>
+  </td></tr>
+  <tr><td>
+    {"".join(buttons)}
+  </td></tr>
+</table>"""
+
+    inner = f'{prose}\n{alt_html}'
+    return _email_wrapper(inner)
+
+
 def build_delivery_email_html(body_plain: str) -> str:
     """Branded HTML for delivery email — content only, no payment block."""
     inner = plain_paragraphs_to_html(body_plain)

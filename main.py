@@ -17,10 +17,12 @@ from agentmail_inbound import (
     extract_inbound_email_fields,
     verify_and_parse_agentmail_body,
 )
-from briefing_parser import parse_briefing
+from briefing_parser import parse_briefing, suggest_search_alternatives
+from config import APP_URL
 from email_html import (
     build_checkout_cta_plaintext,
     build_delivery_email_html,
+    build_no_results_email_html,
     build_preview_email_html,
 )
 from email_writer import write_delivery_email, write_no_results_email, write_preview_email
@@ -132,6 +134,136 @@ async def abgebrochen_page():
 
 
 # ---------------------------------------------------------------------------
+# Retry search — customer clicks alternative search button from no-results email
+# ---------------------------------------------------------------------------
+@app.get("/retry/{job_id}/{variant_key}")
+async def retry_search(job_id: str, variant_key: str, background_tasks: BackgroundTasks):
+    """
+    Customer clicked an alternative search button.
+    Re-runs the offer flow with adjusted parameters in the same thread.
+    """
+    job = job_store.get_job(job_id)
+    if not job:
+        return HTMLResponse("Job nicht gefunden.", status_code=404)
+
+    extra = job.get("extra", {})
+    alternatives = extra.get("alternatives", [])
+    try:
+        idx = int(variant_key.replace("v", ""))
+        alt = alternatives[idx]
+    except (ValueError, IndexError):
+        return HTMLResponse("Ungültige Suchoption.", status_code=400)
+
+    # Store adjusted params and kick off the offer flow in background
+    sender = job.get("sender", "")
+    thread_id = job.get("thread_id", "")
+    original_parsed = extra.get("original_parsed", {})
+
+    # Build a new parsed briefing from the alternative
+    new_parsed = {
+        **original_parsed,
+        "query": alt.get("query", original_parsed.get("query", "")),
+        "filters": alt.get("filters", original_parsed.get("filters", [])),
+        "location": alt.get("location", original_parsed.get("location")),
+        "notes": f"{original_parsed.get('notes', '')} [Angepasste Suche: {alt.get('title', '')}]",
+    }
+
+    job_store.merge_job(job_id, {
+        "status": "retry_search",
+        "parsed": new_parsed,
+    })
+
+    background_tasks.add_task(
+        process_retry_search, job_id, sender, thread_id, new_parsed,
+    )
+
+    # Redirect to confirmation page
+    return HTMLResponse(
+        f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neue Suche gestartet — Longlist</title><style>{_BRAND_PAGE_STYLE}</style></head>
+<body><div class="card">
+  <div class="logo"><strong>Long</strong><span>list</span></div>
+  <div class="icon">&#128269;</div>
+  <h1>Neue Suche gestartet</h1>
+  <p>Wir führen die angepasste Recherche durch und senden Ihnen die Ergebnisse in Kürze per E-Mail.</p>
+  <div class="footer">
+    <a href="https://longlist.email">longlist.email</a> &middot;
+    <a href="https://longlist.email/impressum">Impressum</a> &middot;
+    <a href="https://longlist.email/datenschutz">Datenschutz</a>
+  </div>
+</div></body></html>""",
+        status_code=200,
+    )
+
+
+async def process_retry_search(
+    job_id: str,
+    sender: str,
+    thread_id: str,
+    parsed: dict[str, Any],
+):
+    """Background task: re-run preview search with adjusted parameters and send offer."""
+    try:
+        preview = run_preview_search(
+            query=parsed.get("query", ""),
+            filters=parsed.get("filters"),
+            location=parsed.get("location"),
+            per_page=5,
+        )
+        total_companies = preview["total"]
+        preview_names = [c["name"] for c in preview["preview_companies"]]
+        job_store.merge_job(job_id, {
+            "preview": preview,
+            "total_companies": total_companies,
+            "status": "preview_done",
+        })
+
+        if total_companies == 0:
+            job_store.merge_job(job_id, {"status": "no_results"})
+            logger.warning("Retry search for job %s also returned 0 results", job_id)
+            return
+
+        payment_urls = create_checkout_sessions(
+            job_id=job_id,
+            service_type="longlist",
+            customer_email=sender,
+            total_companies=total_companies,
+        )
+        job_store.merge_job(job_id, {"payment_urls": payment_urls})
+
+        email_body = await write_preview_email(
+            total_companies=total_companies,
+            preview_names=preview_names,
+            search_summary=parsed.get("notes", ""),
+            payment_urls=payment_urls,
+            service_type="longlist",
+        )
+
+        email_plain = email_body + build_checkout_cta_plaintext(payment_urls, total_companies)
+        email_html = build_preview_email_html(email_body, payment_urls, total_companies)
+
+        if thread_id:
+            await reply_to_thread(
+                thread_id=thread_id,
+                to_email=sender,
+                body_html=email_html,
+                body_text=email_plain,
+            )
+
+        job_store.merge_job(job_id, {"status": "offer_sent"})
+        logger.info(
+            "Job %s: Retry offer sent to %s (%d companies)",
+            job_id, sender, total_companies,
+        )
+
+    except Exception as e:
+        logger.exception("Error in retry search for job %s: %s", job_id, e)
+        job_store.merge_job(job_id, {"status": "error", "error": str(e)})
+        await notify_error(job_id, str(e))
+
+
+# ---------------------------------------------------------------------------
 # 1. AgentMail Webhook — incoming email
 # ---------------------------------------------------------------------------
 @app.post("/webhook/agentmail")
@@ -227,15 +359,57 @@ async def process_incoming_email(
             {"total_companies": total_companies, "status": "preview_done"},
         )
 
-        # No results → send follow-up question, no payment links
+        # No results → test alternatives, send follow-up with retry buttons
         if total_companies == 0 and service_type == "longlist":
+            # 1. Generate and test alternative search parameters
+            alternatives = await suggest_search_alternatives(
+                query=parsed.get("query", ""),
+                filters=parsed.get("filters", []),
+                location=parsed.get("location"),
+                notes=parsed.get("notes", ""),
+            )
+
+            tested: list[dict[str, Any]] = []
+            for alt in alternatives[:3]:
+                try:
+                    result = run_preview_search(
+                        query=alt.get("query", ""),
+                        filters=alt.get("filters"),
+                        location=alt.get("location"),
+                        per_page=3,
+                    )
+                    if result["total"] > 0:
+                        tested.append({
+                            **alt,
+                            "total": result["total"],
+                            "preview": [c["name"] for c in result["preview_companies"][:3]],
+                        })
+                except Exception as e:
+                    logger.warning("Alternative search failed: %s", e)
+
+            # 2. Build retry URLs
+            retry_urls: dict[str, str] = {}
+            for i in range(len(tested)):
+                retry_urls[f"v{i}"] = f"{APP_URL}/retry/{job_id}/v{i}"
+
+            # 3. Persist alternatives in job
+            job_store.merge_job(job_id, {
+                "status": "no_results",
+                "extra": {"alternatives": tested, "original_parsed": parsed},
+            })
+
+            # 4. Send email with retry buttons
             no_results_body = await write_no_results_email(
                 search_summary=parsed.get("notes", subject),
                 query=parsed.get("query", ""),
                 filters=parsed.get("filters", []),
                 location=parsed.get("location"),
             )
-            no_results_html = build_delivery_email_html(no_results_body)
+            no_results_html = build_no_results_email_html(
+                body_plain=no_results_body,
+                alternatives=tested,
+                retry_urls=retry_urls,
+            )
 
             if thread_id:
                 await reply_to_thread(
@@ -245,8 +419,10 @@ async def process_incoming_email(
                     body_text=no_results_body,
                 )
 
-            job_store.merge_job(job_id, {"status": "no_results"})
-            logger.info("Job %s: No results for search, sent follow-up to %s", job_id, sender)
+            logger.info(
+                "Job %s: No results, %d alternatives found, sent to %s",
+                job_id, len(tested), sender,
+            )
             return
 
         payment_urls = create_checkout_sessions(
