@@ -198,6 +198,8 @@ def _tier_card(url: str, label: str, desc: str, unit_price_cents: int, total_com
 
 def build_checkout_cta_block(urls: dict[str, str], total_companies: int = 0) -> str:
     """Branded tier cards for Stripe checkout."""
+    if total_companies == 0:
+        return ""
     cards = []
     for key in _PACKAGE_ORDER:
         meta = PACKAGES[key]

@@ -126,6 +126,85 @@ Regeln:
     return response.content[0].text.strip()
 
 
+async def write_no_results_email(
+    search_summary: str,
+    query: str = "",
+    filters: list | None = None,
+    location: dict | None = None,
+) -> str:
+    """Write a follow-up email when the search returned 0 results."""
+    # Build human-readable criteria summary
+    criteria_parts = []
+    if query:
+        criteria_parts.append(f"Suchbegriff: {query}")
+    for f in (filters or []):
+        field = f.get("field", "")
+        value = f.get("value", "")
+        if field == "status":
+            continue  # Skip generic status filter
+        if field == "employees":
+            criteria_parts.append(f"Mitarbeiter: {f.get('min', '?')}–{f.get('max', '?')}")
+        elif field == "legal_form":
+            criteria_parts.append(f"Rechtsform: {value}")
+        elif field == "industry_codes":
+            criteria_parts.append(f"Branchencode (WZ): {value}")
+        else:
+            criteria_parts.append(f"{field}: {value}")
+    if location:
+        criteria_parts.append(f"Standort: Radius {location.get('radius', '?')} km")
+    criteria_str = "\n".join(f"  • {c}" for c in criteria_parts) if criteria_parts else "  (keine spezifischen Filter)"
+
+    if not ANTHROPIC_API_KEY:
+        return _no_results_template(search_summary, criteria_str)
+
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+    user_msg = f"""Die Longlist-Recherche hat 0 Ergebnisse ergeben. Schreibe eine freundliche Rückfrage-E-Mail.
+
+Suchzusammenfassung: {search_summary}
+Verwendete Kriterien:
+{criteria_str}
+
+Regeln:
+- Erkläre kurz, dass die Kombination der Suchkriterien keine Treffer ergeben hat
+- Liste die verwendeten Kriterien auf
+- Schlage konkret vor, was angepasst werden könnte (Region erweitern, Branchencode ändern, Mitarbeiterfilter lockern)
+- Biete an, die Suche mit angepassten Kriterien erneut durchzuführen
+- Betone, dass keine Kosten entstanden sind
+- Sachlich, professionell, Sie-Form
+- KEINE Zahlungslinks, KEINE Paketbeschreibungen
+"""
+
+    response = await client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1000,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+
+    return response.content[0].text.strip()
+
+
+def _no_results_template(summary: str, criteria: str) -> str:
+    """Fallback template when Claude API is unavailable for no-results email."""
+    return f"""Sehr geehrte Damen und Herren,
+
+vielen Dank für Ihre Anfrage ({summary}).
+
+Leider hat die Kombination Ihrer Suchkriterien keine Treffer ergeben:
+{criteria}
+
+Es sind Ihnen keine Kosten entstanden.
+
+Wir empfehlen, die Suchanfrage mit angepassten Kriterien zu wiederholen — etwa durch Erweiterung der geografischen Region oder Lockerung einzelner Filter.
+
+Gerne führen wir eine neue Recherche für Sie durch. Antworten Sie einfach auf diese E-Mail mit Ihren angepassten Kriterien.
+
+Mit freundlichen Grüßen
+Max Zwisler
+Longlist Research"""
+
+
 def _preview_template(
     total: int,
     names: list[str],

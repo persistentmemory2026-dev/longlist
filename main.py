@@ -23,7 +23,7 @@ from email_html import (
     build_delivery_email_html,
     build_preview_email_html,
 )
-from email_writer import write_delivery_email, write_preview_email
+from email_writer import write_delivery_email, write_no_results_email, write_preview_email
 from pipeline import run_pipeline
 from preview_search import run_preview_search
 from stripe_handler import create_checkout_sessions, verify_webhook
@@ -226,6 +226,28 @@ async def process_incoming_email(
             job_id,
             {"total_companies": total_companies, "status": "preview_done"},
         )
+
+        # No results → send follow-up question, no payment links
+        if total_companies == 0 and service_type == "longlist":
+            no_results_body = await write_no_results_email(
+                search_summary=parsed.get("notes", subject),
+                query=parsed.get("query", ""),
+                filters=parsed.get("filters", []),
+                location=parsed.get("location"),
+            )
+            no_results_html = build_delivery_email_html(no_results_body)
+
+            if thread_id:
+                await reply_to_thread(
+                    thread_id=thread_id,
+                    to_email=sender,
+                    body_html=no_results_html,
+                    body_text=no_results_body,
+                )
+
+            job_store.merge_job(job_id, {"status": "no_results"})
+            logger.info("Job %s: No results for search, sent follow-up to %s", job_id, sender)
+            return
 
         payment_urls = create_checkout_sessions(
             job_id=job_id,
