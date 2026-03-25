@@ -18,6 +18,7 @@ from agentmail_inbound import (
     verify_and_parse_agentmail_body,
 )
 from briefing_parser import parse_briefing, suggest_search_alternatives
+from buyer_groups import define_buyer_groups, parse_buyer_selection
 from config import APP_URL
 from email_html import (
     build_checkout_cta_plaintext,
@@ -28,7 +29,14 @@ from email_html import (
 from email_writer import write_delivery_email, write_no_results_email, write_preview_email
 from pipeline import run_pipeline
 from preview_search import run_preview_search
+from sell_side_emails import (
+    build_buyer_groups_email_html,
+    write_buyer_groups_email,
+    write_sell_side_offer_email,
+)
+from sell_side_pipeline import run_sell_side_pipeline
 from stripe_handler import create_checkout_sessions, verify_webhook
+from target_analyzer import analyze_target_company
 from telegram_notify import notify_error, notify_qa_ready
 
 # ---------------------------------------------------------------------------
@@ -287,6 +295,96 @@ async def process_retry_search(
 
 
 # ---------------------------------------------------------------------------
+# Sell-side selection handler — customer replied with buyer group counts
+# ---------------------------------------------------------------------------
+async def process_sell_side_selection(
+    job_id: str,
+    sender: str,
+    body: str,
+    thread_id: str,
+):
+    """Parse buyer group selection, create Stripe checkout, send offer email."""
+    try:
+        job = job_store.get_job(job_id) or {}
+        extra = job.get("extra", {})
+        buyer_groups = extra.get("buyer_groups", [])
+        target_analysis = extra.get("target_analysis", {})
+
+        # Claude double-check: is this actually a selection or a new request?
+        selection = await parse_buyer_selection(body, buyer_groups)
+
+        if not selection:
+            # Not a valid selection — treat as a new briefing
+            logger.info("Job %s: Reply is not a buyer group selection, treating as new briefing", job_id)
+            new_job_id = str(uuid.uuid4())[:8]
+            job_store.put_job(new_job_id, {
+                "status": "parsing", "sender": sender,
+                "subject": "", "thread_id": thread_id, "message_id": "",
+            })
+            await process_incoming_email(new_job_id, sender, "", body, thread_id)
+            return
+
+        total_companies = sum(s.get("count", 0) for s in selection)
+
+        # 0-companies guard (from eng review)
+        if total_companies == 0:
+            if thread_id:
+                await reply_to_thread(
+                    thread_id=thread_id, to_email=sender,
+                    body_html="<p>Ihre Auswahl enthält 0 Unternehmen. Bitte geben Sie mindestens eine Gruppe mit einer Anzahl > 0 an.</p>",
+                    body_text="Ihre Auswahl enthält 0 Unternehmen. Bitte geben Sie mindestens eine Gruppe mit einer Anzahl > 0 an.",
+                )
+            return
+
+        # Update buyer groups with selected counts
+        for s in selection:
+            idx = s.get("group_index", 0)
+            if idx < len(buyer_groups):
+                buyer_groups[idx]["selected_count"] = s["count"]
+
+        job_store.merge_job(job_id, {
+            "status": "selection_received",
+            "total_companies": total_companies,
+            "extra": {**extra, "selection": selection, "buyer_groups": buyer_groups},
+        })
+
+        # Create Stripe checkout
+        payment_urls = create_checkout_sessions(
+            job_id=job_id,
+            service_type="sell_side",
+            customer_email=sender,
+            total_companies=total_companies,
+        )
+        job_store.merge_job(job_id, {"payment_urls": payment_urls})
+
+        # Send offer email with Stripe links
+        target_name = target_analysis.get("name", "Zielunternehmen")
+        offer_body = await write_sell_side_offer_email(
+            target_name=target_name,
+            selection=selection,
+            buyer_groups=buyer_groups,
+            total_companies=total_companies,
+        )
+
+        offer_plain = offer_body + build_checkout_cta_plaintext(payment_urls, total_companies)
+        offer_html = build_preview_email_html(offer_body, payment_urls, total_companies)
+
+        if thread_id:
+            await reply_to_thread(
+                thread_id=thread_id, to_email=sender,
+                body_html=offer_html, body_text=offer_plain,
+            )
+
+        job_store.merge_job(job_id, {"status": "offer_sent"})
+        logger.info("Job %s: Sell-side offer sent to %s (%d companies)", job_id, sender, total_companies)
+
+    except Exception as e:
+        logger.exception("Error in sell-side selection for job %s: %s", job_id, e)
+        job_store.merge_job(job_id, {"status": "error", "error": str(e)})
+        await notify_error(job_id, str(e))
+
+
+# ---------------------------------------------------------------------------
 # 1. AgentMail Webhook — incoming email
 # ---------------------------------------------------------------------------
 @app.post("/webhook/agentmail")
@@ -308,6 +406,17 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
     sender, subject, body, thread_id, message_id = extract_inbound_email_fields(payload)
 
     logger.info("Incoming email from %s: %s (message_id=%s)", sender, subject, message_id)
+
+    # Check if this is a reply to a sell_side job awaiting buyer group selection
+    if thread_id:
+        existing_job = job_store.find_job_by_thread(thread_id)
+        if existing_job and existing_job.get("status") == "awaiting_selection":
+            existing_jid = existing_job.get("job_id", "")
+            logger.info("Sell-side selection reply detected for job %s", existing_jid)
+            background_tasks.add_task(
+                process_sell_side_selection, existing_jid, sender, body, thread_id,
+            )
+            return {"status": "accepted", "job_id": existing_jid, "type": "sell_side_selection"}
 
     job_id = str(uuid.uuid4())[:8]
     job_store.put_job(
@@ -376,6 +485,69 @@ async def process_incoming_email(
             company_list = parsed.get("company_list", [])
             total_companies = len(company_list) if company_list else 0
             preview_names = (company_list or [])[:5]
+
+        elif service_type == "sell_side":
+            # Sell-Side: Analyze target → define buyer groups → count per group
+            target_url = parsed.get("target_company_url")
+            target_name = parsed.get("target_company_name")
+
+            job_store.merge_job(job_id, {"status": "analyzing"})
+            target_analysis = await analyze_target_company(url=target_url, name=target_name)
+
+            buyer_groups = await define_buyer_groups(target_analysis)
+
+            # Count available per group
+            for group in buyer_groups:
+                sanitized_filters = []
+                for f in (group.get("filters") or []):
+                    sf = dict(f)
+                    for k, v in sf.items():
+                        if isinstance(v, (int, float, bool)):
+                            sf[k] = str(v)
+                    sanitized_filters.append(sf)
+                try:
+                    preview = run_preview_search(
+                        query=group.get("query", ""),
+                        filters=sanitized_filters,
+                        location=group.get("location"),
+                        per_page=3,
+                    )
+                    group["available"] = preview["total"]
+                    group["preview_names"] = [c["name"] for c in preview["preview_companies"][:3]]
+                except Exception as e:
+                    logger.warning("Buyer group search failed for '%s': %s", group.get("name"), e)
+                    group["available"] = 0
+                    group["preview_names"] = []
+
+            total_available = sum(g["available"] for g in buyer_groups)
+
+            # Save and send buyer groups email (NO Stripe links)
+            job_store.merge_job(job_id, {
+                "status": "awaiting_selection",
+                "service_type": "sell_side",
+                "total_companies": total_available,
+                "extra": {
+                    "target_analysis": target_analysis,
+                    "buyer_groups": buyer_groups,
+                },
+            })
+
+            groups_body = await write_buyer_groups_email(target_analysis, buyer_groups)
+            groups_html = build_buyer_groups_email_html(groups_body, buyer_groups)
+
+            if thread_id:
+                await reply_to_thread(
+                    thread_id=thread_id,
+                    to_email=sender,
+                    body_html=groups_html,
+                    body_text=groups_body,
+                )
+
+            logger.info(
+                "Job %s: Sell-side analysis complete, %d available across %d groups, sent to %s",
+                job_id, total_available, len(buyer_groups), sender,
+            )
+            return
 
         job_store.merge_job(
             job_id,
@@ -572,12 +744,24 @@ async def process_payment(
 
         job_store.merge_job(job_id, {"status": "enriching"})
 
-        result = await run_pipeline(
-            job_id=job_id,
-            service_type=service_type,
-            package=package,
-            parsed_briefing=parsed_briefing,
-        )
+        # Sell-side uses its own multi-group pipeline
+        if service_type == "sell_side":
+            extra = job.get("extra", {})
+            buyer_groups = extra.get("buyer_groups", [])
+            target_analysis = extra.get("target_analysis", {})
+            result = await run_sell_side_pipeline(
+                job_id=job_id,
+                package=package,
+                buyer_groups=buyer_groups,
+                target_name=target_analysis.get("name", ""),
+            )
+        else:
+            result = await run_pipeline(
+                job_id=job_id,
+                service_type=service_type,
+                package=package,
+                parsed_briefing=parsed_briefing,
+            )
 
         job_store.merge_job(job_id, {"pipeline_result": result, "status": "enrichment_done"})
 

@@ -360,3 +360,27 @@ def try_claim_stripe_session(session_id: str, job_id: str) -> bool:
                 _get_sqlite().rollback()
                 logger.info("Duplicate Stripe webhook ignored for session %s", session_id)
                 return False
+
+
+def find_job_by_thread(thread_id: str) -> dict[str, Any] | None:
+    """Find the most recent job for a given AgentMail thread_id."""
+    if not thread_id:
+        return None
+    with _lock:
+        if _USE_PG:
+            row = _pg_exec(
+                "SELECT job_id FROM jobs WHERE thread_id = %s ORDER BY created_at DESC LIMIT 1",
+                (thread_id,), fetch="one",
+            )
+            if row:
+                return get_job(row[0])
+            return None
+        else:
+            rows = _get_sqlite().execute(
+                "SELECT job_id, data FROM jobs ORDER BY updated_at DESC"
+            ).fetchall()
+            for r in rows:
+                data = json.loads(r["data"])
+                if data.get("thread_id") == thread_id:
+                    return data
+            return None
