@@ -81,14 +81,15 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
     payload, err = verify_and_parse_agentmail_body(raw_body, request.headers)
     if err:
         logger.error("AgentMail webhook rejected: %s", err)
-        return JSONResponse({"status": "error", "detail": err}, status_code=400)
+        # Return 200 even on error — Svix retries on non-2xx, causing infinite loops
+        return JSONResponse({"status": "error", "detail": err}, status_code=200)
 
     if payload.get("_longlist_ignore_event"):
         return {"status": "ignored", "reason": payload.get("event_type")}
 
-    sender, subject, body, thread_id = extract_inbound_email_fields(payload)
+    sender, subject, body, thread_id, message_id = extract_inbound_email_fields(payload)
 
-    logger.info("Incoming email from %s: %s", sender, subject)
+    logger.info("Incoming email from %s: %s (message_id=%s)", sender, subject, message_id)
 
     job_id = str(uuid.uuid4())[:8]
     job_store.put_job(
@@ -98,6 +99,7 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
             "sender": sender,
             "subject": subject,
             "thread_id": thread_id,
+            "message_id": message_id,
         },
     )
 
@@ -180,12 +182,17 @@ async def process_incoming_email(
         email_html = email_body.replace("\n", "<br>")
 
         if thread_id:
-            await reply_to_thread(
+            reply_result = await reply_to_thread(
                 thread_id=thread_id,
                 to_email=sender,
                 body_html=email_html,
                 body_text=email_body,
             )
+            if reply_result.get("error"):
+                logger.error("Job %s: Reply failed: %s", job_id, reply_result["error"])
+                job_store.merge_job(job_id, {"status": "error", "error": f"Reply failed: {reply_result['error']}"})
+                await notify_error(job_id, f"Reply failed: {reply_result['error']}")
+                return
 
         job_store.merge_job(job_id, {"status": "offer_sent"})
         logger.info(

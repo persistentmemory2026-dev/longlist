@@ -74,12 +74,13 @@ def _extract_email(raw: str) -> str:
     return match.group(1) if match else raw.strip()
 
 
-def extract_inbound_email_fields(payload: dict[str, Any]) -> tuple[str, str, str, str]:
-    """Parse AgentMail-style JSON into sender, subject, body, thread_id."""
+def extract_inbound_email_fields(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Parse AgentMail-style JSON into sender, subject, body, thread_id, message_id."""
     message = payload.get("message") or payload.get("data", {}).get("message") or payload
     if not isinstance(message, dict):
         message = {}
-    from_ = message.get("from", {})
+    # AgentMail webhook uses 'from_' (Python-safe) or 'from' key
+    from_ = message.get("from_", "") or message.get("from", "")
     if isinstance(from_, dict):
         sender = from_.get("email") or _extract_email(from_.get("name", "unknown@example.com"))
     elif isinstance(from_, str):
@@ -88,10 +89,12 @@ def extract_inbound_email_fields(payload: dict[str, Any]) -> tuple[str, str, str
         sender = "unknown@example.com"
     subject = message.get("subject", "") or ""
     body = (
-        message.get("text")
+        message.get("extracted_text")
+        or message.get("text")
         or message.get("body")
         or message.get("html", "")
         or ""
     )
     thread_id = message.get("thread_id") or message.get("threadId") or ""
-    return sender, subject, body, thread_id
+    message_id = message.get("message_id") or ""
+    return sender, subject, body, thread_id, message_id
