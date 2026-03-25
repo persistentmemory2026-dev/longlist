@@ -13,6 +13,14 @@ _STRIPE_BUTTON_COLOR = "#ffffff"
 _PACKAGE_ORDER = ("basis", "standard", "premium")
 
 
+def _fmt_eur(cents: int) -> str:
+    """Format EUR cents as German price (e.g. 150 → '1,50 €')."""
+    eur = cents / 100
+    if eur == int(eur):
+        return f"{int(eur)},00 €"
+    return f"{eur:.2f} €".replace(".", ",")
+
+
 def plain_paragraphs_to_html(text: str) -> str:
     """
     Split on blank lines into paragraphs; each paragraph becomes <p>.
@@ -36,7 +44,7 @@ def plain_paragraphs_to_html(text: str) -> str:
     return "\n".join(blocks)
 
 
-def build_checkout_cta_plaintext(urls: dict[str, str]) -> str:
+def build_checkout_cta_plaintext(urls: dict[str, str], total_companies: int = 0) -> str:
     """Appendix for multipart/alternative text part — URLs must match HTML CTAs."""
     lines = [
         "",
@@ -44,9 +52,14 @@ def build_checkout_cta_plaintext(urls: dict[str, str]) -> str:
         "",
     ]
     for key in _PACKAGE_ORDER:
-        label = PACKAGES[key]["label"]
+        pkg = PACKAGES[key]
+        label = pkg["label"]
         url = urls.get(key, "#")
-        lines.append(f"{label}: {url}")
+        if total_companies > 0:
+            total = _fmt_eur(pkg["unit_price_eur_cents"] * total_companies)
+            lines.append(f"{label} ({total}): {url}")
+        else:
+            lines.append(f"{label}: {url}")
     return "\n".join(lines)
 
 
@@ -76,7 +89,7 @@ def _bulletproof_button_row(url: str, button_label: str, package_line: str) -> s
 </table>"""
 
 
-def build_checkout_cta_block(urls: dict[str, str]) -> str:
+def build_checkout_cta_block(urls: dict[str, str], total_companies: int = 0) -> str:
     """Bulletproof table-based buttons linking to Stripe Checkout (one per package)."""
     rows: list[str] = [
         '<div style="margin-top:8px;">',
@@ -88,17 +101,25 @@ def build_checkout_cta_block(urls: dict[str, str]) -> str:
         label = meta["label"]
         desc = meta["description"]
         url = urls.get(key) or "#"
-        package_line = f"{label} — {desc}"
-        button_label = f"Mit {label} bezahlen"
+
+        if total_companies > 0:
+            unit = _fmt_eur(meta["unit_price_eur_cents"])
+            total = _fmt_eur(meta["unit_price_eur_cents"] * total_companies)
+            package_line = f"{label} — {desc} ({unit}/Unternehmen × {total_companies} = {total})"
+            button_label = f"{label} bezahlen — {total}"
+        else:
+            package_line = f"{label} — {desc}"
+            button_label = f"Mit {label} bezahlen"
+
         rows.append(_bulletproof_button_row(url, button_label, package_line))
     rows.append("</div>")
     return "\n".join(rows)
 
 
-def build_preview_email_html(body_plain: str, payment_urls: dict[str, str]) -> str:
+def build_preview_email_html(body_plain: str, payment_urls: dict[str, str], total_companies: int = 0) -> str:
     """Full HTML for the offer email: prose + checkout CTAs."""
     prose = plain_paragraphs_to_html(body_plain)
-    cta = build_checkout_cta_block(payment_urls)
+    cta = build_checkout_cta_block(payment_urls, total_companies)
     return f'{prose}\n{cta}'
 
 

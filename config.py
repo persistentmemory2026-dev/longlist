@@ -36,46 +36,47 @@ LONGLIST_ADMIN_TOKEN = os.getenv("LONGLIST_ADMIN_TOKEN", "")
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", f"{APP_URL}/danke")
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", f"{APP_URL}/abgebrochen")
 
-# --- Stripe Price IDs (live) ---
-STRIPE_PRICES = {
-    "enrichment": {
-        "basis": os.getenv("STRIPE_PRICE_ENRICHMENT_BASIS", "price_1TEZBNAhhBDA1IxVv0iofGpG"),
-        "standard": os.getenv("STRIPE_PRICE_ENRICHMENT_STANDARD", "price_1TEZBWAhhBDA1IxV529sW8Bf"),
-        "premium": os.getenv("STRIPE_PRICE_ENRICHMENT_PREMIUM", "price_1TEZBdAhhBDA1IxVk4hFy662"),
-    },
-    "longlist": {
-        "basis": os.getenv("STRIPE_PRICE_LONGLIST_BASIS", "price_1TEZBSAhhBDA1IxVHyb6TlKc"),
-        "standard": os.getenv("STRIPE_PRICE_LONGLIST_STANDARD", "price_1TEZBZAhhBDA1IxVpPYQt5nP"),
-        "premium": os.getenv("STRIPE_PRICE_LONGLIST_PREMIUM", "price_1TEZBhAhhBDA1IxVmt7ed7UW"),
-    },
-}
-
-# --- Package Definitions ---
-# Maps which OpenRegister endpoints to call per package tier
+# --- Per-Company Dynamic Pricing ---
+# Unit price per company in EUR cents (Stripe uses smallest currency unit)
+# OpenRegister API credits per company:
+#   Details=10, Financials=10, Owners=10, UBOs=25, Holdings=10
+# Margin included on top of API cost.
 PACKAGES = {
     "basis": {
         "label": "BASIS",
-        "endpoints": ["details", "contact"],
+        "endpoints": ["details"],           # 10 credits (details includes contact data)
         "description": "Stammdaten, Adresse, GF, Website, Telefon",
+        "description_long": "Firma, Rechtsform, HR-Nummer, Adresse, Geschäftsführer, Website, Telefon, Branche",
         "includes_financials": False,
         "includes_owners": False,
+        "includes_ubos": False,
+        "includes_holdings": False,
         "includes_email_lookup": False,
+        "unit_price_eur_cents": 150,        # 1,50 € per company
     },
     "standard": {
         "label": "STANDARD",
-        "endpoints": ["details", "contact", "financials"],
+        "endpoints": ["details", "financials"],  # 20 credits
         "description": "Stammdaten + Umsatz, Bilanz, EK, Mitarbeiter",
+        "description_long": "Alles aus BASIS + detaillierte Finanzdaten (Umsatz, Bilanzsumme, Eigenkapital, Jahresüberschuss, Mitarbeiter)",
         "includes_financials": True,
         "includes_owners": False,
+        "includes_ubos": False,
+        "includes_holdings": False,
         "includes_email_lookup": False,
+        "unit_price_eur_cents": 350,        # 3,50 € per company
     },
     "premium": {
         "label": "PREMIUM",
-        "endpoints": ["details", "contact", "financials", "owners"],
-        "description": "Stammdaten + Finanzen + Gesellschafter + GF-Email",
+        "endpoints": ["details", "financials", "owners", "ubos", "holdings"],  # 65 credits
+        "description": "Stammdaten + Finanzen + Gesellschafter + UBOs + Beteiligungen + GF-Email",
+        "description_long": "Alles aus STANDARD + Gesellschafter, wirtschaftlich Berechtigte (UBOs), Beteiligungen/Töchter, verifizierte GF-E-Mail",
         "includes_financials": True,
         "includes_owners": True,
+        "includes_ubos": True,
+        "includes_holdings": True,
         "includes_email_lookup": True,
+        "unit_price_eur_cents": 900,        # 9,00 € per company
     },
 }
 

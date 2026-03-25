@@ -37,9 +37,13 @@ def _get_async_client() -> AsyncOpenregister:
 
 # ---------------------------------------------------------------------------
 # Company Details — 10 credits
+# Includes: name, address, legal_form, register, capital, contact (website,
+# email, phone, social_media, vat_id), indicators, representation, purposes,
+# industry_codes, documents list, status, incorporated_at, terminated_at
+# NOTE: Contact endpoint is redundant — Details already includes all contact data
 # ---------------------------------------------------------------------------
 async def get_details(company_id: str) -> dict[str, Any]:
-    """Fetch company details (Stammdaten, Adresse, GF, etc.)."""
+    """Fetch company details (Stammdaten, Adresse, GF, Kontakt, etc.)."""
     try:
         client = _get_async_client()
         result = await client.company.get_details_v1(company_id=company_id)
@@ -50,25 +54,8 @@ async def get_details(company_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Contact / Web Data — ~5 credits
-# ---------------------------------------------------------------------------
-async def get_contact(company_id: str) -> dict[str, Any]:
-    """Fetch web-sourced contact data (website, phone, email).
-
-    The current openregister-python SDK exposes ``company.get_contact_v0`` only
-    (no ``web_data`` namespace). This matches the live package API.
-    """
-    try:
-        client = _get_async_client()
-        result = await client.company.get_contact_v0(company_id=company_id)
-        return result.model_dump() if hasattr(result, "model_dump") else dict(result)
-    except Exception as e:
-        logger.error("get_contact(%s) failed: %s", company_id, e)
-        return {"error": str(e), "company_id": company_id}
-
-
-# ---------------------------------------------------------------------------
 # Financials — 10 credits
+# Detailed financial statements from Bundesanzeiger
 # ---------------------------------------------------------------------------
 async def get_financials(company_id: str) -> dict[str, Any]:
     """Fetch financial data (Umsatz, Bilanz, EK, Mitarbeiter)."""
@@ -83,6 +70,7 @@ async def get_financials(company_id: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # Owners — 10 credits
+# Shareholder list (name, type, share %, nominal, DOB, city)
 # ---------------------------------------------------------------------------
 async def get_owners(company_id: str) -> dict[str, Any]:
     """Fetch ownership / shareholder data."""
@@ -96,11 +84,44 @@ async def get_owners(company_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# UBOs (Ultimate Beneficial Owners) — 25 credits
+# Computed through ownership chains
+# ---------------------------------------------------------------------------
+async def get_ubos(company_id: str) -> dict[str, Any]:
+    """Fetch ultimate beneficial owners (wirtschaftlich Berechtigte)."""
+    try:
+        client = _get_async_client()
+        # SDK method: company.get_ubos_v1
+        result = await client.company.get_ubos_v1(company_id=company_id)
+        return result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    except Exception as e:
+        logger.error("get_ubos(%s) failed: %s", company_id, e)
+        return {"error": str(e), "company_id": company_id}
+
+
+# ---------------------------------------------------------------------------
+# Holdings — 10 credits
+# Subsidiaries / investments
+# ---------------------------------------------------------------------------
+async def get_holdings(company_id: str) -> dict[str, Any]:
+    """Fetch company holdings / subsidiaries (Beteiligungen)."""
+    try:
+        client = _get_async_client()
+        # SDK method: company.get_holdings_v1
+        result = await client.company.get_holdings_v1(company_id=company_id)
+        return result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    except Exception as e:
+        logger.error("get_holdings(%s) failed: %s", company_id, e)
+        return {"error": str(e), "company_id": company_id}
+
+
+# ---------------------------------------------------------------------------
 # Mapping: endpoint name → fetch function
 # ---------------------------------------------------------------------------
 ENDPOINT_FETCHERS = {
     "details": get_details,
-    "contact": get_contact,
     "financials": get_financials,
     "owners": get_owners,
+    "ubos": get_ubos,
+    "holdings": get_holdings,
 }

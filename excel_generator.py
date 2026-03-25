@@ -47,6 +47,14 @@ OWNER_COLUMNS = [
     ("Beteiligung (%)", 15),
 ]
 
+UBO_COLUMNS = [
+    ("Wirtsch. Berechtigte (UBOs)", 35),
+]
+
+HOLDINGS_COLUMNS = [
+    ("Beteiligungen / Töchter", 40),
+]
+
 EMAIL_COLUMNS = [
     ("GF-Email", 30),
 ]
@@ -78,8 +86,8 @@ def _safe(val: Any, default: str = "n/v") -> str:
 
 
 def _extract_representatives(details: dict) -> str:
-    """Extract Geschäftsführer names from details."""
-    reps = details.get("representatives") or details.get("geschaeftsfuehrer") or []
+    """Extract Geschäftsführer names from details.representation."""
+    reps = details.get("representation") or details.get("representatives") or details.get("geschaeftsfuehrer") or []
     if isinstance(reps, list):
         names = []
         for r in reps:
@@ -104,6 +112,16 @@ def _extract_address(details: dict) -> tuple[str, str, str]:
     return "n/v", "n/v", "n/v"
 
 
+def _extract_contact_from_details(details: dict) -> tuple[str, str]:
+    """Extract (website, phone) from details.contact sub-object."""
+    contact = details.get("contact", {})
+    if isinstance(contact, dict):
+        website = contact.get("website") or details.get("website") or ""
+        phone = contact.get("phone") or details.get("phone") or ""
+        return _safe(website), _safe(phone)
+    return _safe(details.get("website")), _safe(details.get("phone"))
+
+
 def _extract_owners(owners_data: dict) -> list[tuple[str, str]]:
     """Extract list of (name, share%) from owners data."""
     owners_list = owners_data.get("owners") or owners_data.get("shareholders") or []
@@ -116,6 +134,42 @@ def _extract_owners(owners_data: dict) -> list[tuple[str, str]]:
             share = o.get("share_percent") or o.get("share") or ""
             results.append((name or "n/v", _safe(share)))
     return results
+
+
+def _extract_ubos(ubos_data: dict) -> str:
+    """Extract UBO names from UBOs data."""
+    ubos_list = ubos_data.get("ubos") or ubos_data.get("beneficial_owners") or []
+    if not isinstance(ubos_list, list):
+        return "n/v"
+    names = []
+    for u in ubos_list:
+        if isinstance(u, dict):
+            name = u.get("name") or f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
+            share = u.get("share_percent") or u.get("share") or ""
+            if name:
+                entry = f"{name} ({share}%)" if share else name
+                names.append(entry)
+        elif isinstance(u, str):
+            names.append(u)
+    return ", ".join(names) if names else "n/v"
+
+
+def _extract_holdings(holdings_data: dict) -> str:
+    """Extract holdings/subsidiaries from holdings data."""
+    holdings_list = holdings_data.get("holdings") or holdings_data.get("subsidiaries") or []
+    if not isinstance(holdings_list, list):
+        return "n/v"
+    entries = []
+    for h in holdings_list:
+        if isinstance(h, dict):
+            name = h.get("name") or h.get("company_name") or ""
+            share = h.get("share_percent") or h.get("share") or ""
+            if name:
+                entry = f"{name} ({share}%)" if share else name
+                entries.append(entry)
+        elif isinstance(h, str):
+            entries.append(h)
+    return ", ".join(entries) if entries else "n/v"
 
 
 def generate_excel(
@@ -131,6 +185,8 @@ def generate_excel(
     """
     includes_financials = package in ("standard", "premium")
     includes_owners = package == "premium"
+    includes_ubos = package == "premium"
+    includes_holdings = package == "premium"
     includes_email = package == "premium"
 
     # Build column list
@@ -139,6 +195,10 @@ def generate_excel(
         columns.extend(FINANCIAL_COLUMNS)
     if includes_owners:
         columns.extend(OWNER_COLUMNS)
+    if includes_ubos:
+        columns.extend(UBO_COLUMNS)
+    if includes_holdings:
+        columns.extend(HOLDINGS_COLUMNS)
     if includes_email:
         columns.extend(EMAIL_COLUMNS)
 
@@ -161,38 +221,41 @@ def generate_excel(
     # Write company rows
     for idx, company in enumerate(companies, 1):
         details = company.get("details", {})
-        contact = company.get("contact", {})
         financials = company.get("financials", {})
         owners = company.get("owners", {})
+        ubos = company.get("ubos", {})
+        holdings = company.get("holdings", {})
 
         # Handle error responses
         if "error" in details:
             details = {}
-        if "error" in contact:
-            contact = {}
         if "error" in financials:
             financials = {}
         if "error" in owners:
             owners = {}
+        if "error" in ubos:
+            ubos = {}
+        if "error" in holdings:
+            holdings = {}
 
         street, plz, city = _extract_address(details)
         gf = _extract_representatives(details)
+        website, phone = _extract_contact_from_details(details)
 
         row = idx + 1
-        col = 1
 
         # Base columns
         values = [
             idx,  # Nr.
             _safe(details.get("name") or company.get("name")),
             _safe(details.get("legal_form")),
-            _safe(details.get("register_number") or company.get("company_id")),
+            _safe(details.get("register_number") or details.get("company_register") or company.get("company_id")),
             street,
             plz,
             city,
             gf,
-            _safe(contact.get("website") or details.get("website")),
-            _safe(contact.get("phone") or details.get("phone")),
+            website,
+            phone,
         ]
 
         if includes_financials:
@@ -224,6 +287,12 @@ def generate_excel(
                 values.append(", ".join(s for _, s in owner_list))
             else:
                 values.extend(["n/v", "n/v"])
+
+        if includes_ubos:
+            values.append(_extract_ubos(ubos))
+
+        if includes_holdings:
+            values.append(_extract_holdings(holdings))
 
         if includes_email:
             values.append(_safe(company.get("gf_email")))

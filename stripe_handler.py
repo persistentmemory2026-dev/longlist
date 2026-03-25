@@ -1,4 +1,4 @@
-"""Longlist — Stripe checkout session creation & webhook handling."""
+"""Longlist — Stripe checkout session creation & webhook handling (dynamic per-company pricing)."""
 from __future__ import annotations
 
 import time
@@ -9,7 +9,7 @@ import stripe
 from config import (
     STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET,
-    STRIPE_PRICES,
+    PACKAGES,
     STRIPE_SUCCESS_URL,
     STRIPE_CANCEL_URL,
 )
@@ -24,9 +24,13 @@ def create_checkout_sessions(
     job_id: str,
     service_type: str,
     customer_email: str,
+    total_companies: int = 0,
 ) -> dict[str, str]:
     """
     Create 3 Stripe Checkout Sessions (basis/standard/premium) for a job.
+
+    Uses dynamic price_data with quantity = total_companies so the customer
+    sees "X companies × Y €/company = total" on the Stripe checkout page.
 
     Returns: {"basis": url, "standard": url, "premium": url}
     """
@@ -38,27 +42,47 @@ def create_checkout_sessions(
             "premium": f"https://example.com/pay/premium/{job_id}",
         }
 
-    price_map = STRIPE_PRICES.get(service_type, STRIPE_PRICES["longlist"])
+    # Ensure at least 1 company for the session
+    qty = max(total_companies, 1)
+
     urls: dict[str, str] = {}
 
-    for package in ("basis", "standard", "premium"):
-        price_id = price_map[package]
+    for package_key in ("basis", "standard", "premium"):
+        pkg = PACKAGES[package_key]
+        unit_price = pkg["unit_price_eur_cents"]  # in EUR cents
+
         session = stripe.checkout.Session.create(
             mode="payment",
-            line_items=[{"price": price_id, "quantity": 1}],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "eur",
+                        "product_data": {
+                            "name": f"Longlist {pkg['label']}",
+                            "description": pkg["description"],
+                        },
+                        "unit_amount": unit_price,
+                    },
+                    "quantity": qty,
+                }
+            ],
             customer_email=customer_email,
             metadata={
                 "job_id": job_id,
-                "package": package,
+                "package": package_key,
                 "service_type": service_type,
+                "total_companies": str(qty),
             },
             invoice_creation={"enabled": True},
-            expires_at=int(time.time()) + 23 * 3600,  # 23 hours (Stripe test mode max is 24h)
+            expires_at=int(time.time()) + 23 * 3600,  # 23 hours
             success_url=STRIPE_SUCCESS_URL,
             cancel_url=STRIPE_CANCEL_URL,
         )
-        urls[package] = session.url
-        logger.info("Created checkout session for %s/%s: %s", service_type, package, session.id)
+        urls[package_key] = session.url
+        logger.info(
+            "Created checkout: %s/%s — %d × %d ct = %d ct (session %s)",
+            service_type, package_key, qty, unit_price, qty * unit_price, session.id,
+        )
 
     return urls
 
@@ -90,11 +114,12 @@ def verify_webhook(payload: bytes, sig_header: str) -> dict[str, Any] | None:
     metadata = session.get("metadata", {})
 
     logger.info(
-        "Payment completed: job_id=%s, package=%s, service=%s, customer=%s",
+        "Payment completed: job_id=%s, package=%s, service=%s, customer=%s, companies=%s",
         metadata.get("job_id"),
         metadata.get("package"),
         metadata.get("service_type"),
         session.get("customer_email"),
+        metadata.get("total_companies"),
     )
 
     return {
@@ -105,4 +130,5 @@ def verify_webhook(payload: bytes, sig_header: str) -> dict[str, Any] | None:
         "amount_total": session.get("amount_total"),
         "currency": session.get("currency"),
         "stripe_session_id": session.get("id"),
+        "total_companies": metadata.get("total_companies"),
     }

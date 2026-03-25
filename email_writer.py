@@ -2,7 +2,7 @@
 import logging
 
 import anthropic
-from config import ANTHROPIC_API_KEY
+from config import ANTHROPIC_API_KEY, PACKAGES
 
 logger = logging.getLogger("longlist.email_writer")
 
@@ -19,6 +19,28 @@ Stil:
 """
 
 
+def _fmt_eur(cents: int) -> str:
+    """Format EUR cents as German price string (e.g. 150 → '1,50 €')."""
+    eur = cents / 100
+    if eur == int(eur):
+        return f"{int(eur)},00 €"
+    return f"{eur:.2f} €".replace(".", ",")
+
+
+def _build_pricing_info(total_companies: int) -> str:
+    """Build a pricing table string for the email prompt."""
+    lines = []
+    for key in ("basis", "standard", "premium"):
+        pkg = PACKAGES[key]
+        unit = _fmt_eur(pkg["unit_price_eur_cents"])
+        total = _fmt_eur(pkg["unit_price_eur_cents"] * total_companies)
+        lines.append(
+            f"- {pkg['label']} ({unit}/Unternehmen × {total_companies} = {total}): "
+            f"{pkg['description_long']}"
+        )
+    return "\n".join(lines)
+
+
 async def write_preview_email(
     total_companies: int,
     preview_names: list[str],
@@ -28,13 +50,14 @@ async def write_preview_email(
 ) -> str:
     """
     Write the preview/offer email after initial search.
-    Includes company count, preview names, and package copy; payment URLs are appended in main.py.
+    Includes company count, preview names, and per-company pricing; payment URLs are appended in main.py.
     """
     _ = payment_urls  # Checkout URLs appended in main.py (HTML + plaintext CTA)
 
     if not ANTHROPIC_API_KEY:
-        # Fallback template (URLs appended in main.py)
         return _preview_template(total_companies, preview_names, search_summary, service_type)
+
+    pricing_info = _build_pricing_info(total_companies)
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -45,15 +68,13 @@ Suchergebnis: {total_companies} Unternehmen gefunden
 Beispiel-Unternehmen: {', '.join(preview_names[:5])}
 Suchzusammenfassung: {search_summary}
 
-Paket-Beschreibungen (nur inhaltlich erklären, keine URLs oder Platzhalter):
-- BASIS (Stammdaten): Firma, Adresse, Geschäftsführer, Website, Telefon
-- STANDARD (+ Finanzen): zusätzlich Umsatz, Bilanz, Eigenkapital, Mitarbeiter
-- PREMIUM (+ Gesellschafter & GF-Email): zusätzlich Eigentümerstruktur und verifizierte GF-E-Mail
+Paket-Beschreibungen mit Preisen (pro Unternehmen × Anzahl = Gesamtpreis):
+{pricing_info}
 
 Regeln:
 - Nenne die genaue Anzahl gefundener Unternehmen
 - Liste 3-5 Beispielunternehmen auf
-- Stelle die 3 Pakete klar dar (BASIS, STANDARD, PREMIUM) — ohne Links, ohne „hier klicken“, ohne URL-Zeilen
+- Stelle die 3 Pakete klar dar (BASIS, STANDARD, PREMIUM) — mit dem Preis pro Unternehmen UND dem Gesamtpreis
 - Keine URLs, keine http(s)-Adressen — Zahlungslinks werden separat angefügt
 - Erwähne dass nach Zahlung die Daten innerhalb von 24h geliefert werden
 - Kein Betreff nötig (wird als Reply gesendet)
@@ -114,6 +135,18 @@ def _preview_template(
     """Fallback template when Claude API is unavailable (no payment URLs — added in main)."""
     preview = "\n".join(f"  • {n}" for n in names[:5])
     svc = "Longlist-Recherche" if service_type == "longlist" else "Datenanreicherung"
+
+    # Build pricing lines
+    pricing_lines = []
+    for key in ("basis", "standard", "premium"):
+        pkg = PACKAGES[key]
+        unit = _fmt_eur(pkg["unit_price_eur_cents"])
+        total_price = _fmt_eur(pkg["unit_price_eur_cents"] * total)
+        pricing_lines.append(
+            f"• {pkg['label']} — {pkg['description']} ({unit}/Unternehmen, gesamt {total_price})"
+        )
+    pricing_block = "\n".join(pricing_lines)
+
     return f"""Sehr geehrte Damen und Herren,
 
 vielen Dank für Ihre Anfrage. Basierend auf Ihren Kriterien ({summary}) haben wir {total} Unternehmen identifiziert ({svc}).
@@ -123,9 +156,7 @@ Hier ein Auszug:
 
 Wir bieten drei Datenpakete:
 
-• BASIS — Stammdaten, Adresse, GF, Website, Telefon
-• STANDARD — zusätzlich Umsatz, Bilanz, EK, Mitarbeiter
-• PREMIUM — zusätzlich Gesellschafter und verifizierte GF-E-Mail
+{pricing_block}
 
 Die Zahlung können Sie über die Schaltflächen unter diesem Text auslösen.
 

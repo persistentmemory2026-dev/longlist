@@ -47,10 +47,9 @@ async def enrich_company(
     # Email lookup (PREMIUM only)
     if include_email_lookup:
         details = result.get("details", {})
-        contact = result.get("contact", {})
 
-        # Get first representative name
-        reps = details.get("representatives") or []
+        # Get first representative name from details.representation
+        reps = details.get("representation") or details.get("representatives") or []
         gf_name = None
         if isinstance(reps, list) and reps:
             rep = reps[0]
@@ -59,8 +58,15 @@ async def enrich_company(
             elif isinstance(rep, str):
                 gf_name = rep
 
-        # Get domain
-        domain = contact.get("website") or details.get("website") or ""
+        # Get domain from details.contact (Details endpoint includes contact data)
+        contact_data = details.get("contact", {})
+        if isinstance(contact_data, dict):
+            domain = contact_data.get("website") or ""
+        else:
+            domain = ""
+        # Fallback to top-level website
+        if not domain:
+            domain = details.get("website") or ""
 
         if gf_name and domain:
             email_result = await find_email(gf_name, domain)

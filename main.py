@@ -173,6 +173,7 @@ async def process_incoming_email(
             job_id=job_id,
             service_type=service_type,
             customer_email=sender,
+            total_companies=total_companies,
         )
         job_store.merge_job(job_id, {"payment_urls": payment_urls})
 
@@ -184,8 +185,8 @@ async def process_incoming_email(
             service_type=service_type,
         )
 
-        email_plain = email_body + build_checkout_cta_plaintext(payment_urls)
-        email_html = build_preview_email_html(email_body, payment_urls)
+        email_plain = email_body + build_checkout_cta_plaintext(payment_urls, total_companies)
+        email_html = build_preview_email_html(email_body, payment_urls, total_companies)
 
         if thread_id:
             reply_result = await reply_to_thread(
