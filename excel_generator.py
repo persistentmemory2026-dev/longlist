@@ -21,6 +21,7 @@ THIN_BORDER = Border(
 )
 
 # Column definitions per package tier
+# BASE_COLUMNS maps to the Details endpoint (10 credits) — all packages get these
 BASE_COLUMNS = [
     ("Nr.", 5),
     ("Firma", 35),
@@ -32,6 +33,12 @@ BASE_COLUMNS = [
     ("Geschäftsführer", 30),
     ("Website", 30),
     ("Telefon", 20),
+    ("E-Mail", 30),
+    ("Stammkapital", 18),
+    ("Branche (WZ-Code)", 35),
+    ("Unternehmensgegenstand", 40),
+    ("Status", 12),
+    ("Gründungsdatum", 16),
 ]
 
 FINANCIAL_COLUMNS = [
@@ -59,11 +66,15 @@ EMAIL_COLUMNS = [
     ("GF-Email", 30),
 ]
 
+DOCUMENT_COLUMNS = [
+    ("Dokumente (Links)", 50),
+]
+
 
 def _fmt_eur(value: Any) -> str:
     """Format a number as German EUR string (Punkt = Tausender)."""
-    if value is None or value == "" or value == "n/v":
-        return "n/v"
+    if value is None or value == "":
+        return ""
     try:
         num = float(value)
         # Convert from cents if value seems to be in cents (> 100000)
@@ -76,8 +87,8 @@ def _fmt_eur(value: Any) -> str:
         return str(value)
 
 
-def _safe(val: Any, default: str = "n/v") -> str:
-    """Return val as string, or default if None/empty."""
+def _safe(val: Any, default: str = "") -> str:
+    """Return val as string, or empty string if None/empty."""
     if val is None or val == "" or val == []:
         return default
     if isinstance(val, list):
@@ -85,41 +96,149 @@ def _safe(val: Any, default: str = "n/v") -> str:
     return str(val)
 
 
+def _extract_name(details: dict, company: dict) -> str:
+    """Extract company name — details.name can be a dict or string."""
+    name = details.get("name") or company.get("name")
+    if isinstance(name, dict):
+        return name.get("name") or _safe(name)
+    return _safe(name)
+
+
+def _extract_legal_form(details: dict) -> str:
+    """Extract legal form, handling both string and dict 'name' field."""
+    lf = details.get("legal_form")
+    if lf:
+        return str(lf).upper()
+    name = details.get("name")
+    if isinstance(name, dict):
+        lf = name.get("legal_form")
+        return str(lf).upper() if lf else ""
+    return ""
+
+
+def _extract_register(details: dict, company: dict) -> str:
+    """Format register info: 'HRB 232360, AG Berlin (Charlottenburg)'."""
+    reg = details.get("company_register") or details.get("register") or {}
+    if isinstance(reg, dict):
+        rtype = reg.get("register_type", "")
+        rnum = reg.get("register_number", "")
+        court = reg.get("register_court", "")
+        if rtype and rnum:
+            parts = [f"{rtype} {rnum}"]
+            if court:
+                parts.append(f"AG {court}")
+            return ", ".join(parts)
+    cid = company.get("company_id") or details.get("id") or ""
+    return _safe(cid)
+
+
 def _extract_representatives(details: dict) -> str:
     """Extract Geschäftsführer names from details.representation."""
-    reps = details.get("representation") or details.get("representatives") or details.get("geschaeftsfuehrer") or []
+    reps = details.get("representation") or details.get("representatives") or []
     if isinstance(reps, list):
         names = []
         for r in reps:
             if isinstance(r, dict):
                 name = r.get("name") or f"{r.get('first_name', '')} {r.get('last_name', '')}".strip()
+                role = r.get("role", "")
                 if name:
                     names.append(name)
             elif isinstance(r, str):
                 names.append(r)
-        return ", ".join(names) if names else "n/v"
+        return ", ".join(names) if names else ""
     return _safe(reps)
 
 
 def _extract_address(details: dict) -> tuple[str, str, str]:
-    """Extract (street, zip, city) from details."""
+    """Extract (street, zip, city) from details.address."""
     addr = details.get("address") or {}
     if isinstance(addr, dict):
-        street = addr.get("street", "") or ""
-        house = addr.get("house_number", "") or ""
-        full_street = f"{street} {house}".strip() if street else "n/v"
-        return full_street, _safe(addr.get("zip_code")), _safe(addr.get("city"))
-    return "n/v", "n/v", "n/v"
+        street = addr.get("street") or addr.get("formatted_value") or ""
+        plz = addr.get("postal_code") or addr.get("zip_code") or ""
+        city = addr.get("city") or ""
+        return _safe(street) if street else "", _safe(plz), _safe(city)
+    return "", "", ""
 
 
-def _extract_contact_from_details(details: dict) -> tuple[str, str]:
-    """Extract (website, phone) from details.contact sub-object."""
+def _extract_contact_from_details(details: dict) -> tuple[str, str, str]:
+    """Extract (website, phone, email) from details.contact sub-object."""
     contact = details.get("contact", {})
     if isinstance(contact, dict):
-        website = contact.get("website") or details.get("website") or ""
-        phone = contact.get("phone") or details.get("phone") or ""
-        return _safe(website), _safe(phone)
-    return _safe(details.get("website")), _safe(details.get("phone"))
+        website = contact.get("website_url") or contact.get("website") or ""
+        phone = contact.get("phone") or ""
+        email = contact.get("email") or ""
+        return _safe(website), _safe(phone), _safe(email)
+    return "", "", ""
+
+
+def _extract_capital(details: dict) -> str:
+    """Extract share capital (Stammkapital) from details.capital."""
+    capital = details.get("capital") or {}
+    if isinstance(capital, dict):
+        amount = capital.get("amount") or capital.get("value") or ""
+        currency = capital.get("currency") or "EUR"
+        if amount:
+            try:
+                num = float(amount)
+                formatted = f"{int(num):,}".replace(",", ".") if num == int(num) else f"{num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                return f"{formatted} {currency}"
+            except (ValueError, TypeError):
+                return str(amount)
+    elif capital and not isinstance(capital, dict):
+        return _safe(capital)
+    return ""
+
+
+def _extract_industry_codes(details: dict) -> str:
+    """Extract industry/WZ codes from details.industry_codes."""
+    codes = details.get("industry_codes") or details.get("nace_codes") or []
+    if not isinstance(codes, list):
+        return _safe(codes)
+    entries = []
+    for c in codes:
+        if isinstance(c, dict):
+            code = c.get("code") or c.get("wz_code") or c.get("nace_code") or ""
+            desc = c.get("description") or c.get("label") or c.get("name") or ""
+            if code and desc:
+                entries.append(f"{code} — {desc}")
+            elif code:
+                entries.append(str(code))
+            elif desc:
+                entries.append(desc)
+        elif isinstance(c, str):
+            entries.append(c)
+    return ", ".join(entries) if entries else ""
+
+
+def _extract_purposes(details: dict) -> str:
+    """Extract company purpose (Unternehmensgegenstand) from details.purposes."""
+    purposes = details.get("purposes") or details.get("purpose") or []
+    if isinstance(purposes, list):
+        texts = []
+        for p in purposes:
+            if isinstance(p, dict):
+                texts.append(p.get("text") or p.get("description") or str(p))
+            elif isinstance(p, str):
+                texts.append(p)
+        return "; ".join(texts) if texts else ""
+    return _safe(purposes)
+
+
+def _extract_financials_from_indicators(details: dict) -> dict:
+    """Extract financial summary from details.indicators list (most recent year)."""
+    indicators = details.get("indicators") or []
+    if not isinstance(indicators, list) or not indicators:
+        return {}
+    latest = indicators[0]
+    if isinstance(latest, dict):
+        return {
+            "revenue": latest.get("revenue"),
+            "balance_sheet_total": latest.get("balance_sheet_total"),
+            "equity": latest.get("equity"),
+            "employees": latest.get("employees"),
+            "date": latest.get("date"),
+        }
+    return {}
 
 
 def _extract_owners(owners_data: dict) -> list[tuple[str, str]]:
@@ -130,9 +249,17 @@ def _extract_owners(owners_data: dict) -> list[tuple[str, str]]:
     results = []
     for o in owners_list:
         if isinstance(o, dict):
-            name = o.get("name") or f"{o.get('first_name', '')} {o.get('last_name', '')}".strip()
-            share = o.get("share_percent") or o.get("share") or ""
-            results.append((name or "n/v", _safe(share)))
+            name = o.get("name") or ""
+            if not name:
+                lp = o.get("legal_person") or {}
+                np = o.get("natural_person") or {}
+                name = lp.get("name") if isinstance(lp, dict) else ""
+                if not name and isinstance(np, dict):
+                    name = f"{np.get('first_name', '')} {np.get('last_name', '')}".strip()
+            share = o.get("percentage_share") or o.get("share_percent") or o.get("share") or ""
+            if share and isinstance(share, (int, float)):
+                share = f"{share:.1f}"
+            results.append((name or "", _safe(share)))
     return results
 
 
@@ -140,7 +267,7 @@ def _extract_ubos(ubos_data: dict) -> str:
     """Extract UBO names from UBOs data."""
     ubos_list = ubos_data.get("ubos") or ubos_data.get("beneficial_owners") or []
     if not isinstance(ubos_list, list):
-        return "n/v"
+        return ""
     names = []
     for u in ubos_list:
         if isinstance(u, dict):
@@ -151,14 +278,14 @@ def _extract_ubos(ubos_data: dict) -> str:
                 names.append(entry)
         elif isinstance(u, str):
             names.append(u)
-    return ", ".join(names) if names else "n/v"
+    return ", ".join(names) if names else ""
 
 
 def _extract_holdings(holdings_data: dict) -> str:
     """Extract holdings/subsidiaries from holdings data."""
     holdings_list = holdings_data.get("holdings") or holdings_data.get("subsidiaries") or []
     if not isinstance(holdings_list, list):
-        return "n/v"
+        return ""
     entries = []
     for h in holdings_list:
         if isinstance(h, dict):
@@ -169,7 +296,31 @@ def _extract_holdings(holdings_data: dict) -> str:
                 entries.append(entry)
         elif isinstance(h, str):
             entries.append(h)
-    return ", ".join(entries) if entries else "n/v"
+    return ", ".join(entries) if entries else ""
+
+
+def _extract_documents(details: dict) -> str:
+    """Extract document URLs from details.documents list."""
+    docs = details.get("documents") or []
+    if not isinstance(docs, list):
+        return ""
+    entries = []
+    for d in docs:
+        if isinstance(d, dict):
+            title = d.get("title") or d.get("name") or d.get("type") or "Dokument"
+            url = d.get("url") or d.get("download_url") or d.get("link") or ""
+            date = d.get("date") or d.get("published_at") or ""
+            if url:
+                entry = f"{title}"
+                if date:
+                    entry += f" ({date})"
+                entry += f": {url}"
+                entries.append(entry)
+            elif title:
+                entries.append(title)
+        elif isinstance(d, str):
+            entries.append(d)
+    return "\n".join(entries) if entries else ""
 
 
 def generate_excel(
@@ -203,6 +354,8 @@ def generate_excel(
         columns.extend(HOLDINGS_COLUMNS)
     if includes_email:
         columns.extend(EMAIL_COLUMNS)
+    # Always include document links when available (all packages get details)
+    columns.extend(DOCUMENT_COLUMNS)
 
     wb = Workbook()
     ws = wb.active
@@ -242,45 +395,45 @@ def generate_excel(
 
         street, plz, city = _extract_address(details)
         gf = _extract_representatives(details)
-        website, phone = _extract_contact_from_details(details)
+        website, phone, company_email = _extract_contact_from_details(details)
 
         row = idx + 1
 
-        # Base columns
+        # Base columns (all from Details endpoint)
         values = [
             idx,  # Nr.
-            _safe(details.get("name") or company.get("name")),
-            _safe(details.get("legal_form")),
-            _safe(details.get("register_number") or details.get("company_register") or company.get("company_id")),
+            _extract_name(details, company),
+            _extract_legal_form(details),
+            _extract_register(details, company),
             street,
             plz,
             city,
             gf,
             website,
             phone,
+            company_email,
+            _extract_capital(details),
+            _extract_industry_codes(details),
+            _extract_purposes(details),
+            _safe(details.get("status")),
+            _safe(details.get("incorporated_at")),
         ]
 
         if includes_financials:
+            # Primary: use details.indicators for summary financials
+            ind = _extract_financials_from_indicators(details)
+            # Fallback: try financials endpoint data
             fin = financials.get("financials") or financials
-            # Try to get most recent year
             annual = fin.get("annual_reports") or fin.get("reports") or []
-            if isinstance(annual, list) and annual:
-                latest = annual[0]  # Assume sorted descending
-                values.extend([
-                    _fmt_eur(latest.get("revenue")),
-                    _fmt_eur(latest.get("balance_sheet_total")),
-                    _fmt_eur(latest.get("equity")),
-                    _safe(latest.get("employees")),
-                    _safe(latest.get("fiscal_year") or latest.get("year")),
-                ])
-            else:
-                values.extend([
-                    _fmt_eur(fin.get("revenue")),
-                    _fmt_eur(fin.get("balance_sheet_total")),
-                    _fmt_eur(fin.get("equity")),
-                    _safe(fin.get("employees")),
-                    _safe(fin.get("fiscal_year")),
-                ])
+            latest_report = annual[0] if isinstance(annual, list) and annual else {}
+
+            values.extend([
+                _fmt_eur(ind.get("revenue") or latest_report.get("revenue")),
+                _fmt_eur(ind.get("balance_sheet_total") or latest_report.get("balance_sheet_total")),
+                _fmt_eur(ind.get("equity") or latest_report.get("equity")),
+                _safe(ind.get("employees") or latest_report.get("employees")),
+                _safe(ind.get("date") or latest_report.get("fiscal_year") or latest_report.get("year")),
+            ])
 
         if includes_owners:
             owner_list = _extract_owners(owners)
@@ -288,7 +441,7 @@ def generate_excel(
                 values.append(", ".join(n for n, _ in owner_list))
                 values.append(", ".join(s for _, s in owner_list))
             else:
-                values.extend(["n/v", "n/v"])
+                values.extend(["", ""])
 
         if includes_ubos:
             values.append(_extract_ubos(ubos))
@@ -298,6 +451,9 @@ def generate_excel(
 
         if includes_email:
             values.append(_safe(company.get("gf_email")))
+
+        # Document links (always included)
+        values.append(_extract_documents(details))
 
         # Write values
         for col_idx, val in enumerate(values, 1):

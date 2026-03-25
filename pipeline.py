@@ -9,6 +9,7 @@ from openregister_client import ENDPOINT_FETCHERS
 from preview_search import run_preview_search
 from anymailfinder_client import find_email
 from excel_generator import generate_excel
+from job_store import merge_job
 
 logger = logging.getLogger("longlist.pipeline")
 
@@ -204,6 +205,14 @@ async def run_pipeline(
 
         logger.info("Enriched %d / %d companies", len(enriched), len(companies_to_enrich))
 
+    # Persist enriched data to job store (survives redeployments with PG)
+    merge_job(job_id, {
+        "status": "enriched",
+        "enriched_data": enriched,
+        "total_companies": len(companies_to_enrich),
+    })
+    logger.info("Enriched data persisted for job %s", job_id)
+
     # Step 3: Generate Excel
     excel_path = generate_excel(
         companies=enriched,
@@ -211,6 +220,16 @@ async def run_pipeline(
         job_id=job_id,
         output_dir="/tmp",
     )
+
+    # Persist final pipeline result
+    merge_job(job_id, {
+        "status": "excel_ready",
+        "pipeline_result": {
+            "excel_path": excel_path,
+            "total_found": len(companies_to_enrich),
+            "enriched_count": len(enriched),
+        },
+    })
 
     logger.info("Pipeline complete: job=%s, %d companies enriched", job_id, len(enriched))
 

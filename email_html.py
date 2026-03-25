@@ -64,8 +64,29 @@ def _email_wrapper(inner_html: str) -> str:
 </html>"""
 
 
+def _markdown_to_html_inline(text: str) -> str:
+    """Convert basic Markdown inline formatting to HTML.
+
+    Handles: **bold**, *italic*, - list items.
+    Must be called AFTER html.escape() since it injects HTML tags.
+    """
+    # Bold: **text** → <strong>text</strong>
+    text = re.sub(
+        r"\*\*(.+?)\*\*",
+        rf'<strong style="font-weight:600;color:{_TEXT_MAIN};">\1</strong>',
+        text,
+    )
+    # Italic: *text* → <em>text</em> (only single asterisks, not inside bold)
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<em>\1</em>", text)
+    return text
+
+
 def plain_paragraphs_to_html(text: str) -> str:
-    """Convert plain text paragraphs into styled HTML paragraphs."""
+    """Convert plain text paragraphs into styled HTML paragraphs.
+
+    Supports Markdown-style **bold** and *italic* formatting, and
+    converts lines starting with '- ' into a simple list.
+    """
     text = (text or "").strip()
     if not text:
         return ""
@@ -76,11 +97,34 @@ def plain_paragraphs_to_html(text: str) -> str:
         chunk = chunk.strip()
         if not chunk:
             continue
-        inner = html.escape(chunk).replace("\n", "<br>\n")
-        blocks.append(
-            f'<p style="margin:0 0 16px 0;font-family:{_FONT_BASE};'
-            f'font-size:15px;line-height:1.6;color:{_TEXT_MAIN};">{inner}</p>'
-        )
+
+        lines = chunk.split("\n")
+
+        # Check if this chunk is a list (all lines start with '- ')
+        is_list = all(line.strip().startswith("- ") for line in lines if line.strip())
+
+        if is_list:
+            items = []
+            for line in lines:
+                line = line.strip()
+                if line.startswith("- "):
+                    item_text = html.escape(line[2:].strip())
+                    item_text = _markdown_to_html_inline(item_text)
+                    items.append(
+                        f'<li style="margin:0 0 4px 0;font-family:{_FONT_BASE};'
+                        f'font-size:15px;line-height:1.6;color:{_TEXT_MAIN};">{item_text}</li>'
+                    )
+            blocks.append(
+                f'<ul style="margin:0 0 16px 0;padding-left:20px;">{"".join(items)}</ul>'
+            )
+        else:
+            inner = html.escape(chunk)
+            inner = _markdown_to_html_inline(inner)
+            inner = inner.replace("\n", "<br>\n")
+            blocks.append(
+                f'<p style="margin:0 0 16px 0;font-family:{_FONT_BASE};'
+                f'font-size:15px;line-height:1.6;color:{_TEXT_MAIN};">{inner}</p>'
+            )
     return "\n".join(blocks)
 
 
