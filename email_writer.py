@@ -1,4 +1,6 @@
 """Longlist — Claude Call #2: Write delivery email for completed job."""
+from __future__ import annotations
+
 import logging
 
 import anthropic
@@ -83,6 +85,7 @@ Recherche-Zusammenfassung: {search_summary}
 **Stilregeln:**
 - KEINE URLs oder Links im Text — Zahlungsbuttons werden automatisch unter der E-Mail angefügt
 - KEINE Paketpreise wiederholen die schon in den Buttons stehen — fokussiere auf den Mehrwert jedes Pakets
+- KEINE Markdown-Tabellen (Pipe-Syntax) — verwende Aufzählungen oder Fließtext für Paketübersichten
 - Sachlich, professionell, Sie-Form
 - Maximal 200 Wörter — kurz und auf den Punkt
 """

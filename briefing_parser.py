@@ -1,4 +1,6 @@
 """Longlist — Claude Call #1: Parse M&A briefing email into structured JSON."""
+from __future__ import annotations
+
 import json
 import logging
 from typing import Any
@@ -15,6 +17,10 @@ Deine Aufgabe: Analysiere die eingehende E-Mail und extrahiere strukturierte Suc
 ## Entscheidung 1: Service-Typ
 - "enrichment" (Service 1): Kunde liefert eine LISTE konkreter Firmennamen → wir reichern diese an
 - "longlist" (Service 2): Kunde beschreibt KRITERIEN → wir suchen passende Unternehmen
+- "sell_side" (Service 3): Kunde liefert ein ZIELUNTERNEHMEN (URL oder Name) und will potenzielle KÄUFER finden.
+  Erkenne an: "Käufer finden", "Buyer-Longlist", "Sell-Side", "Mandat verkaufen", "potenzielle Käufer",
+  "potenzielle Erwerber", "wer könnte kaufen", "Übernahme-Kandidaten", "Akquisiteure",
+  "Käuferliste erstellen", "Interessenten finden"
 
 ## Entscheidung 2: Suchparameter extrahieren
 
@@ -22,7 +28,10 @@ Gib ein JSON-Objekt zurück mit genau dieser Struktur:
 
 ```json
 {
-  "service_type": "longlist" | "enrichment",
+  "service_type": "longlist" | "enrichment" | "sell_side",
+  "target_company_url": "https://zielunternehmen.de" | null,
+  "target_company_name": "Zielunternehmen GmbH" | null,
+  "desired_count": 200 | null,
   "query": "Suchbegriff für Branche/Tätigkeit",
   "filters": [
     {"field": "status", "value": "active"},
@@ -165,6 +174,9 @@ async def parse_briefing(
 
     # Ensure defaults
     parsed.setdefault("service_type", "longlist")
+    parsed.setdefault("target_company_url", None)
+    parsed.setdefault("target_company_name", None)
+    parsed.setdefault("desired_count", None)
     parsed.setdefault("query", "")
     parsed.setdefault("filters", [])
     parsed.setdefault("location", None)

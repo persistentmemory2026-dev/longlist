@@ -162,11 +162,16 @@ Antworte NUR mit dem JSON-Array."""}],
         selection = json.loads(raw_text)
         if not isinstance(selection, list):
             return []
-        # Validate indices
+        # Validate indices and cap counts
         for s in selection:
-            if s.get("group_index", -1) >= len(buyer_groups):
+            idx = s.get("group_index", -1)
+            if not (0 <= idx < len(buyer_groups)):
                 s["group_index"] = 0
+                idx = 0
             s["count"] = max(0, int(s.get("count", 0)))
+            # Cap at available count per group (prevent runaway API costs)
+            available = buyer_groups[idx].get("available", 500)
+            s["count"] = min(s["count"], available, 500)  # Hard cap 500
         return selection
     except (json.JSONDecodeError, ValueError) as e:
         logger.error("Failed to parse buyer selection: %s", e)

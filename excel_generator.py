@@ -1,4 +1,6 @@
 """Longlist — Excel generation with openpyxl, German formatting."""
+from __future__ import annotations
+
 import logging
 import os
 from typing import Any
@@ -372,33 +374,71 @@ def generate_excel(
 
     Returns the file path.
     """
-    from config import PACKAGES
-    pkg = PACKAGES.get(package, {})
-    includes_financials = pkg.get("includes_financials", False)
-    includes_owners = pkg.get("includes_owners", False)
-    includes_ubos = pkg.get("includes_ubos", False)
-    includes_holdings = pkg.get("includes_holdings", False)
-    includes_email = pkg.get("includes_email_lookup", False)
-
-    # Build column list
-    columns = list(BASE_COLUMNS)
-    if includes_financials:
-        columns.extend(FINANCIAL_COLUMNS)
-    if includes_owners:
-        columns.extend(OWNER_COLUMNS)
-    if includes_ubos:
-        columns.extend(UBO_COLUMNS)
-    if includes_holdings:
-        columns.extend(HOLDINGS_COLUMNS)
-    if includes_email:
-        columns.extend(EMAIL_COLUMNS)
-    # Always include document links when available (all packages get details)
-    columns.extend(DOCUMENT_COLUMNS)
+    columns, includes_financials, includes_owners, includes_ubos, includes_holdings, includes_email = \
+        get_columns_for_package(package)
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Longlist"
 
+    write_company_sheet(ws, companies, columns, package, app_url,
+                        includes_financials, includes_owners, includes_ubos,
+                        includes_holdings, includes_email)
+
+    # Auto-filter
+    if companies:
+        last_col = get_column_letter(len(columns))
+        last_row = len(companies) + 1
+        ws.auto_filter.ref = f"A1:{last_col}{last_row}"
+
+    # Save
+    filename = f"Longlist_{job_id}_{package.upper()}.xlsx"
+    filepath = os.path.join(output_dir, filename)
+    wb.save(filepath)
+    logger.info("Excel generated: %s (%d companies)", filepath, len(companies))
+
+    return filepath
+
+
+def get_columns_for_package(package: str) -> tuple[list, bool, bool, bool, bool, bool]:
+    """Return (columns, includes_financials, includes_owners, includes_ubos, includes_holdings, includes_email)."""
+    from config import PACKAGES
+    pkg = PACKAGES.get(package, {})
+    inc_fin = pkg.get("includes_financials", False)
+    inc_own = pkg.get("includes_owners", False)
+    inc_ubo = pkg.get("includes_ubos", False)
+    inc_hld = pkg.get("includes_holdings", False)
+    inc_email = pkg.get("includes_email_lookup", False)
+
+    columns = list(BASE_COLUMNS)
+    if inc_fin:
+        columns.extend(FINANCIAL_COLUMNS)
+    if inc_own:
+        columns.extend(OWNER_COLUMNS)
+    if inc_ubo:
+        columns.extend(UBO_COLUMNS)
+    if inc_hld:
+        columns.extend(HOLDINGS_COLUMNS)
+    if inc_email:
+        columns.extend(EMAIL_COLUMNS)
+    columns.extend(DOCUMENT_COLUMNS)
+
+    return columns, inc_fin, inc_own, inc_ubo, inc_hld, inc_email
+
+
+def write_company_sheet(
+    ws,
+    companies: list[dict],
+    columns: list[tuple[str, int]],
+    package: str,
+    app_url: str = "",
+    includes_financials: bool = False,
+    includes_owners: bool = False,
+    includes_ubos: bool = False,
+    includes_holdings: bool = False,
+    includes_email: bool = False,
+) -> None:
+    """Write header row + company data rows to a worksheet. Shared by all Excel generators."""
     # Write header row
     for col_idx, (col_name, col_width) in enumerate(columns, 1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)
@@ -501,17 +541,3 @@ def generate_excel(
             cell.border = THIN_BORDER
             if col_idx == 1:  # Nr. column centered
                 cell.alignment = Alignment(horizontal="center")
-
-    # Auto-filter
-    if companies:
-        last_col = get_column_letter(len(columns))
-        last_row = len(companies) + 1
-        ws.auto_filter.ref = f"A1:{last_col}{last_row}"
-
-    # Save
-    filename = f"Longlist_{job_id}_{package.upper()}.xlsx"
-    filepath = os.path.join(output_dir, filename)
-    wb.save(filepath)
-    logger.info("Excel generated: %s (%d companies)", filepath, len(companies))
-
-    return filepath
