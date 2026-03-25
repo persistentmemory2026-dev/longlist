@@ -58,8 +58,8 @@ def create_checkout_sessions(
                     "price_data": {
                         "currency": "eur",
                         "product_data": {
-                            "name": f"Longlist {pkg['label']}",
-                            "description": pkg["description"],
+                            "name": pkg.get("stripe_product_name", f"Longlist {pkg['label']}"),
+                            "description": pkg.get("stripe_description", pkg["description"]),
                         },
                         "unit_amount": unit_price,
                     },

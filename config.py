@@ -47,6 +47,15 @@ PACKAGES = {
         "endpoints": ["details"],           # 10 credits (details includes contact data)
         "description": "Stammdaten, Adresse, GF, Website, Telefon",
         "description_long": "Firma, Rechtsform, HR-Nummer, Adresse, Geschäftsführer, Website, Telefon, Branche",
+        "stripe_product_name": "Longlist BASIS — Stammdaten",
+        "stripe_description": (
+            "Grundlegende Unternehmensdaten pro Firma: "
+            "Firmenname, Rechtsform, Handelsregister-Nr., "
+            "vollständige Adresse (Straße, PLZ, Stadt), "
+            "Geschäftsführer/Vertretungsberechtigte, "
+            "Website, Telefon, E-Mail, Branchencodes (WZ/NACE). "
+            "Lieferung als formatierte Excel-Datei innerhalb von 24h."
+        ),
         "includes_financials": False,
         "includes_owners": False,
         "includes_ubos": False,
@@ -59,6 +68,14 @@ PACKAGES = {
         "endpoints": ["details", "financials"],  # 20 credits
         "description": "Stammdaten + Umsatz, Bilanz, EK, Mitarbeiter",
         "description_long": "Alles aus BASIS + detaillierte Finanzdaten (Umsatz, Bilanzsumme, Eigenkapital, Jahresüberschuss, Mitarbeiter)",
+        "stripe_product_name": "Longlist STANDARD — Stammdaten + Finanzen",
+        "stripe_description": (
+            "Alle Daten aus BASIS plus detaillierte Finanzdaten aus dem Bundesanzeiger: "
+            "Umsatz, Bilanzsumme, Eigenkapital, Jahresüberschuss, "
+            "Mitarbeiterzahl, Geschäftsjahr. "
+            "Ideal für die erste Einschätzung von Zielunternehmen. "
+            "Lieferung als formatierte Excel-Datei innerhalb von 24h."
+        ),
         "includes_financials": True,
         "includes_owners": False,
         "includes_ubos": False,
@@ -71,6 +88,16 @@ PACKAGES = {
         "endpoints": ["details", "financials", "owners", "ubos", "holdings"],  # 65 credits
         "description": "Stammdaten + Finanzen + Gesellschafter + UBOs + Beteiligungen + GF-Email",
         "description_long": "Alles aus STANDARD + Gesellschafter, wirtschaftlich Berechtigte (UBOs), Beteiligungen/Töchter, verifizierte GF-E-Mail",
+        "stripe_product_name": "Longlist PREMIUM — Vollständiges Firmenprofil",
+        "stripe_description": (
+            "Alle Daten aus STANDARD plus Eigentümerstruktur: "
+            "Gesellschafter mit Beteiligungshöhe, "
+            "wirtschaftlich Berechtigte (UBOs) über alle Beteiligungsebenen, "
+            "Tochtergesellschaften und Beteiligungen, "
+            "verifizierte Geschäftsführer-E-Mail-Adresse. "
+            "Das umfassendste Paket für M&A Due Diligence. "
+            "Lieferung als formatierte Excel-Datei innerhalb von 24h."
+        ),
         "includes_financials": True,
         "includes_owners": True,
         "includes_ubos": True,
