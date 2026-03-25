@@ -496,6 +496,12 @@ async def process_incoming_email(
 
             buyer_groups = await define_buyer_groups(target_analysis)
 
+            if not buyer_groups:
+                job_store.merge_job(job_id, {"status": "error", "error": "Failed to define buyer groups"})
+                logger.error("Job %s: No buyer groups generated", job_id)
+                await notify_error(job_id, "Buyer group definition failed — Claude returned empty result")
+                return
+
             # Count available per group
             for group in buyer_groups:
                 sanitized_filters = []

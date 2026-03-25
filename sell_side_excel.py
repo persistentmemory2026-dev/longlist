@@ -80,8 +80,18 @@ def generate_sell_side_excel(
         if not companies:
             continue
 
-        # Excel tab names max 31 chars, no special chars
-        tab_name = group.get("name", "Gruppe")[:31]
+        # Excel tab names: max 31 chars, no forbidden chars, deduplicate
+        import re as _re
+        raw_name = group.get("name", "Gruppe")
+        tab_name = _re.sub(r'[\\/*?\[\]:]', '', raw_name)[:31] or "Gruppe"
+        # Deduplicate
+        existing = [s.title for s in wb.worksheets]
+        if tab_name in existing:
+            for suffix in range(2, 100):
+                candidate = f"{tab_name[:28]}_{suffix}"
+                if candidate not in existing:
+                    tab_name = candidate
+                    break
         ws = wb.create_sheet(title=tab_name)
 
         write_company_sheet(

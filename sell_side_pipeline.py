@@ -3,7 +3,6 @@ import logging
 from typing import Any
 
 from config import APP_URL, PACKAGES
-from openregister_client import ENDPOINT_FETCHERS
 from pipeline import enrich_company
 from preview_search import run_preview_search
 from sell_side_excel import generate_sell_side_excel

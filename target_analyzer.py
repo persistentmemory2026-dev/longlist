@@ -77,13 +77,13 @@ async def analyze_target_company(
                     website_content += r.get("raw_content", "")[:5000]
 
             search_query = f"Unternehmensprofil {name or url}"
-            company_info = await tavily.get_company_info(
+            search_result = await tavily.search(
                 query=search_query,
                 search_depth="advanced",
                 max_results=5,
             )
-            for info in company_info:
-                company_research += f"\n{info.get('content', '')}"
+            for r in search_result.get("results", []):
+                company_research += f"\n{r.get('content', '')}"
                 if len(company_research) > 3000:
                     break
 

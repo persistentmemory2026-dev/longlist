@@ -84,7 +84,7 @@ def _markdown_to_html_inline(text: str) -> str:
 def _is_markdown_table(lines: list[str]) -> bool:
     """Check if lines form a Markdown pipe table."""
     data_lines = [l for l in lines if l.strip() and not re.match(r"^\|[\s\-:|]+\|$", l.strip())]
-    if len(data_lines) < 1:
+    if len(data_lines) < 2:  # Need header + at least 1 body row
         return False
     return all(l.strip().startswith("|") and l.strip().endswith("|") for l in data_lines)
 
