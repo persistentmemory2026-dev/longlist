@@ -134,6 +134,29 @@ async def abgebrochen_page():
 
 
 # ---------------------------------------------------------------------------
+# Document proxy — serves fresh signed URLs for OpenRegister documents
+# ---------------------------------------------------------------------------
+@app.get("/doc/{document_id}")
+async def proxy_document(document_id: str):
+    """Fetch a fresh signed S3 URL from OpenRegister and redirect to it."""
+    from fastapi.responses import RedirectResponse
+    from openregister import Openregister
+    from config import OPENREGISTER_API_KEY
+
+    if not OPENREGISTER_API_KEY:
+        return JSONResponse({"error": "OpenRegister not configured"}, status_code=503)
+    try:
+        client = Openregister(api_key=OPENREGISTER_API_KEY)
+        doc = client.document.get_cached_v1(document_id=document_id)
+        if not doc.url:
+            return JSONResponse({"error": "Document URL not available"}, status_code=404)
+        return RedirectResponse(url=doc.url)
+    except Exception as e:
+        logger.error("Document proxy failed for %s: %s", document_id, e)
+        return JSONResponse({"error": "Document not found"}, status_code=404)
+
+
+# ---------------------------------------------------------------------------
 # Retry search — customer clicks alternative search button from no-results email
 # ---------------------------------------------------------------------------
 @app.get("/retry/{job_id}/{variant_key}")

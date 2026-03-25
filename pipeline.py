@@ -8,6 +8,7 @@ from config import PACKAGES
 from openregister_client import ENDPOINT_FETCHERS
 from preview_search import run_preview_search
 from anymailfinder_client import find_email
+from config import APP_URL
 from excel_generator import generate_excel
 from job_store import merge_job
 
@@ -219,6 +220,7 @@ async def run_pipeline(
         package=package,
         job_id=job_id,
         output_dir="/tmp",
+        app_url=APP_URL,
     )
 
     # Persist final pipeline result

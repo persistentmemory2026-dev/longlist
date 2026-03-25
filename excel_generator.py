@@ -308,44 +308,53 @@ def _extract_holdings(holdings_data: dict) -> str:
     return ", ".join(entries) if entries else ""
 
 
-def _extract_documents(details: dict) -> str:
-    """Extract document URLs from details.documents list."""
+def _extract_documents(details: dict, app_url: str = "") -> str:
+    """Extract document info with proxy URLs from details.documents list."""
     docs = details.get("documents") or []
     if not isinstance(docs, list):
         return ""
     entries = []
     for d in docs:
         if isinstance(d, dict):
-            title = d.get("title") or d.get("name") or d.get("type") or "Dokument"
-            url = d.get("url") or d.get("download_url") or d.get("link") or ""
-            date = d.get("date") or d.get("published_at") or ""
-            if url:
-                entry = f"{title}"
-                if date:
-                    entry += f" ({date})"
-                entry += f": {url}"
-                entries.append(entry)
-            elif title:
-                entries.append(title)
+            doc_id = d.get("id", "")
+            title = d.get("name") or d.get("title") or _doc_type_label(d.get("type")) or "Dokument"
+            date = d.get("date") or ""
+            entry = title
+            if date:
+                entry += f" ({date})"
+            if doc_id and app_url:
+                entry += f": {app_url}/doc/{doc_id}"
+            entries.append(entry)
         elif isinstance(d, str):
             entries.append(d)
     return "\n".join(entries) if entries else ""
 
 
-def _extract_document_urls(details: dict) -> str:
-    """Extract only the raw URLs from details.documents list, semicolon-separated."""
+def _extract_document_urls(details: dict, app_url: str = "") -> str:
+    """Extract proxy URLs for documents, semicolon-separated."""
     docs = details.get("documents") or []
     if not isinstance(docs, list):
         return ""
     urls = []
     for d in docs:
         if isinstance(d, dict):
-            url = d.get("url") or d.get("download_url") or d.get("link") or ""
-            if url:
-                urls.append(url)
-        elif isinstance(d, str) and d.startswith("http"):
-            urls.append(d)
+            doc_id = d.get("id", "")
+            if doc_id and app_url:
+                urls.append(f"{app_url}/doc/{doc_id}")
     return "; ".join(urls) if urls else ""
+
+
+def _doc_type_label(doc_type: str | None) -> str:
+    """German label for OpenRegister document types."""
+    labels = {
+        "articles_of_association": "Gesellschaftsvertrag",
+        "current_printout": "Aktueller Abdruck",
+        "chronological_printout": "Chronologischer Abdruck",
+        "historical_printout": "Historischer Abdruck",
+        "structured_information": "Strukturierte Daten",
+        "shareholder_list": "Gesellschafterliste",
+    }
+    return labels.get(doc_type or "", doc_type or "")
 
 
 def generate_excel(
@@ -353,6 +362,7 @@ def generate_excel(
     package: str,
     job_id: str,
     output_dir: str = "/tmp",
+    app_url: str = "",
 ) -> str:
     """
     Generate a formatted Excel file from enriched company data.
@@ -478,8 +488,8 @@ def generate_excel(
             values.append(_safe(company.get("gf_email")))
 
         # Document links (always included) — two columns: hyperlinks + raw URLs
-        values.append(_extract_documents(details))
-        values.append(_extract_document_urls(details))
+        values.append(_extract_documents(details, app_url=app_url))
+        values.append(_extract_document_urls(details, app_url=app_url))
 
         # Write values
         for col_idx, val in enumerate(values, 1):
