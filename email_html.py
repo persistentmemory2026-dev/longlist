@@ -81,11 +81,71 @@ def _markdown_to_html_inline(text: str) -> str:
     return text
 
 
+def _is_markdown_table(lines: list[str]) -> bool:
+    """Check if lines form a Markdown pipe table."""
+    data_lines = [l for l in lines if l.strip() and not re.match(r"^\|[\s\-:|]+\|$", l.strip())]
+    if len(data_lines) < 1:
+        return False
+    return all(l.strip().startswith("|") and l.strip().endswith("|") for l in data_lines)
+
+
+def _markdown_table_to_html(lines: list[str]) -> str:
+    """Convert Markdown pipe-table lines into a styled HTML table."""
+    rows: list[list[str]] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Skip separator rows like |---|---|
+        if re.match(r"^\|[\s\-:|]+\|$", line):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        rows.append(cells)
+
+    if not rows:
+        return ""
+
+    header = rows[0]
+    body = rows[1:]
+
+    th_style = (
+        f"padding:8px 12px;font-family:{_FONT_BASE};font-size:13px;font-weight:600;"
+        f"color:{_TEXT_MAIN};border-bottom:2px solid {_BORDER_STRONG};"
+        f"text-align:left;"
+    )
+    td_style = (
+        f"padding:8px 12px;font-family:{_FONT_BASE};font-size:14px;"
+        f"color:{_TEXT_MAIN};border-bottom:1px solid {_BORDER_SUBTLE};"
+    )
+
+    thead = "<tr>" + "".join(
+        f'<th style="{th_style}">{_markdown_to_html_inline(html.escape(c))}</th>'
+        for c in header
+    ) + "</tr>"
+
+    tbody_rows = []
+    for row in body:
+        tds = "".join(
+            f'<td style="{td_style}">{_markdown_to_html_inline(html.escape(c))}</td>'
+            for c in row
+        )
+        tbody_rows.append(f"<tr>{tds}</tr>")
+
+    return (
+        f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"'
+        f' style="margin:0 0 16px 0;border-collapse:collapse;">'
+        f"<thead>{thead}</thead>"
+        f'<tbody>{"".join(tbody_rows)}</tbody>'
+        f"</table>"
+    )
+
+
 def plain_paragraphs_to_html(text: str) -> str:
     """Convert plain text paragraphs into styled HTML paragraphs.
 
-    Supports Markdown-style **bold** and *italic* formatting, and
-    converts lines starting with '- ' into a simple list.
+    Supports Markdown-style **bold** and *italic* formatting,
+    converts lines starting with '- ' into a simple list,
+    and converts Markdown pipe tables into HTML tables.
     """
     text = (text or "").strip()
     if not text:
@@ -99,6 +159,11 @@ def plain_paragraphs_to_html(text: str) -> str:
             continue
 
         lines = chunk.split("\n")
+
+        # Check if this chunk is a Markdown table
+        if _is_markdown_table(lines):
+            blocks.append(_markdown_table_to_html(lines))
+            continue
 
         # Check if this chunk is a list (all lines start with '- ')
         is_list = all(line.strip().startswith("- ") for line in lines if line.strip())
