@@ -33,12 +33,20 @@ Für jede Käufergruppe erstelle ein Objekt mit:
   KEINE Finanz-Filter (revenue etc.) — Daten zu lückenhaft!
 - "location": {{"latitude": 51.0, "longitude": 10.0, "radius": 500}} oder null (bundesweit)
 
-Typische Käufergruppen:
-1. Strategische Käufer (gleiche Branche, typischerweise größer)
-2. Horizontale Expansion (angrenzende/komplementäre Branchen)
-3. Vertikale Integration (Zulieferer oder Abnehmer)
-4. PE/Finanzinvestoren (mit passendem Branchenfokus — suche nach "Beteiligungsgesellschaft")
-5. Branchenfremde Käufer (mit strategischem Interesse an der Technologie/Kundenbasis)
+WICHTIG: Wir suchen NUR strategische Käufer (operative Unternehmen).
+KEINE Finanzinvestoren, KEINE PE-Fonds, KEINE Family Offices, KEINE Beteiligungsgesellschaften.
+Unsere Datenbank enthält nur Handelsregister-Firmen — keine Investoren.
+
+Typische Kategorien strategischer Käufer:
+1. Direkte Wettbewerber (gleiche Branche, gleiche/ähnliche Produkte, typischerweise größer)
+2. Horizontale Expandierer (angrenzende/komplementäre Branchen die ins Zielgebiet expandieren wollen)
+3. Vertikale Integrierer (Zulieferer oder Abnehmer in der Wertschöpfungskette des Zielunternehmens)
+4. Branchenfremde Strategen (Unternehmen die Technologie, Kundenbasis oder Know-how des Ziels für Diversifikation nutzen könnten)
+
+Denke wie ein M&A-Berater:
+- Wer profitiert am meisten von den Synergien mit dem Zielunternehmen?
+- Wer hat ein strategisches Motiv? (Marktanteil, Technologie, Kunden, Geografie)
+- Wer ist groß genug für eine Akquisition dieser Größenordnung?
 
 Regeln:
 - Mindestens 3, maximal 5 Gruppen
@@ -46,6 +54,7 @@ Regeln:
 - Gruppen nach erwarteter Relevanz sortieren (beste zuerst)
 - Mindestens eine Gruppe bundesweit (location: null)
 - Filter minimal halten — je weniger Filter, desto mehr Treffer
+- NUR operative Unternehmen, KEINE Investoren/Fonds
 
 Antworte NUR mit dem JSON-Array."""
 
