@@ -1,17 +1,59 @@
+# Environment
 .env
 .env.local
-.cursor/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
-*.xlsx
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+
+# IDEs & Editors
+.cursor/
 .idea/
 .vscode/
+
+# AI Tools (nicht im Stack)
+.adal/
+.agents/
+.augment/
+.codebuddy/
+.commandcode/
+.continue/
+.cortex/
+.crush/
+.factory/
+.goose/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.vibe/
+.windsurf/
+.zencoder/
+
+# Cowork artifacts
+skills/
+skills-lock.json
+
+# Data & Output
+*.xlsx
 *.log
 *.db
 *.db-journal

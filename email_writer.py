@@ -61,24 +61,30 @@ async def write_preview_email(
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
-    user_msg = f"""Schreibe eine Antwort-E-Mail für folgende Situation:
+    user_msg = f"""Schreibe eine Antwort-E-Mail auf eine Recherche-Anfrage.
 
-Service: {"Longlist-Recherche" if service_type == "longlist" else "Datenanreicherung"}
+**Kontext:**
+Service: {"Longlist-Recherche (Suche nach Kriterien)" if service_type == "longlist" else "Datenanreicherung (konkrete Firmennamen)"}
 Suchergebnis: {total_companies} Unternehmen gefunden
 Beispiel-Unternehmen: {', '.join(preview_names[:5])}
-Suchzusammenfassung: {search_summary}
+Recherche-Zusammenfassung: {search_summary}
 
-Paket-Beschreibungen mit Preisen (pro Unternehmen × Anzahl = Gesamtpreis):
+**Pakete mit Preisen:**
 {pricing_info}
 
-Regeln:
-- Nenne die genaue Anzahl gefundener Unternehmen
-- Liste 3-5 Beispielunternehmen auf
-- Stelle die 3 Pakete klar dar (Basis, Kontakt, Deep Data) — mit dem Preis pro Unternehmen UND dem Gesamtpreis
-- Keine URLs, keine http(s)-Adressen — Zahlungslinks werden separat angefügt
-- Erwähne dass nach Zahlung die Daten innerhalb von 24h geliefert werden
-- Kein Betreff nötig (wird als Reply gesendet)
+**Struktur der E-Mail (genau in dieser Reihenfolge):**
+1. Kurze Begrüßung + Bestätigung der Anfrage (1 Satz)
+2. **Ergebnis:** Anzahl gefundener Unternehmen + 3-5 Beispiele als Aufzählung
+3. **Pakete:** Alle drei Pakete mit Stückpreis UND Gesamtpreis klar darstellen. Hebe die Unterschiede zwischen den Paketen hervor (nicht nur Preise, sondern welche Datenpunkte man bekommt)
+4. **Nächster Schritt:** Hinweis dass die Paketauswahl direkt unter der E-Mail möglich ist
+5. **Lieferversprechen:** Formatierte Excel-Datei innerhalb von 24 Stunden nach Zahlung
+6. Abschluss mit Kontaktangebot bei Rückfragen
+
+**Stilregeln:**
+- KEINE URLs oder Links im Text — Zahlungsbuttons werden automatisch unter der E-Mail angefügt
+- KEINE Paketpreise wiederholen die schon in den Buttons stehen — fokussiere auf den Mehrwert jedes Pakets
 - Sachlich, professionell, Sie-Form
+- Maximal 200 Wörter — kurz und auf den Punkt
 """
 
     response = await client.messages.create(
@@ -102,18 +108,27 @@ async def write_delivery_email(
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
-    user_msg = f"""Schreibe eine Lieferungs-E-Mail:
+    from config import PACKAGES
+    pkg_label = PACKAGES.get(package, {}).get("label", package)
 
-Paket: {package.upper()}
+    user_msg = f"""Schreibe eine Lieferungs-E-Mail für eine abgeschlossene Recherche.
+
+**Kontext:**
+Paket: {pkg_label}
 Anzahl Unternehmen: {enriched_count}
 Recherche: {search_summary}
 
-Regeln:
-- Bestätige die Lieferung der Excel-Datei im Anhang
-- Nenne Anzahl der Unternehmen und das gewählte Paket
-- Biete an, bei Rückfragen zur Verfügung zu stehen
-- Erwähne: "Die Rechnung erhalten Sie separat per E-Mail von Stripe."
-- Kurz und sachlich
+**Struktur der E-Mail:**
+1. Bestätigung: Excel-Datei ist im Anhang, {enriched_count} Unternehmen im Paket "{pkg_label}"
+2. **Was Sie erhalten haben:** Kurze Aufzählung der enthaltenen Datenpunkte je nach Paket
+3. **Empfohlene nächste Schritte:** 2-3 konkrete Vorschläge was der Berater mit den Daten tun kann (z.B. "Targets priorisieren", "GF direkt kontaktieren", "Finanzdaten in Ihre Bewertungsmodelle übernehmen")
+4. Rechnungshinweis: "Die Rechnung erhalten Sie separat per E-Mail von Stripe."
+5. Kontaktangebot: Bei Rückfragen oder für eine Folgerecherche
+
+**Stilregeln:**
+- Maximal 150 Wörter
+- Sachlich, professionell, Sie-Form
+- Betone den Mehrwert der gelieferten Daten
 """
 
     response = await client.messages.create(

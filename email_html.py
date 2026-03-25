@@ -235,10 +235,15 @@ def build_checkout_cta_block(urls: dict[str, str], total_companies: int = 0) -> 
 
 
 def build_preview_email_html(body_plain: str, payment_urls: dict[str, str], total_companies: int = 0) -> str:
-    """Full branded HTML for the offer email: prose + tier cards."""
+    """Full branded HTML for the offer email: prose + divider + tier cards."""
     prose = plain_paragraphs_to_html(body_plain)
     cta = build_checkout_cta_block(payment_urls, total_companies)
-    inner = f'{prose}\n{cta}'
+    # Visual divider between prose and CTA
+    divider = f"""
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
+  <tr><td style="border-top:1px solid {_BORDER_SUBTLE};"></td></tr>
+</table>""" if cta else ""
+    inner = f'{prose}\n{divider}\n{cta}'
     return _email_wrapper(inner)
 
 
