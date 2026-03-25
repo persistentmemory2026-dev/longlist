@@ -31,6 +31,7 @@ Für jede Käufergruppe erstelle ein Objekt mit:
   - {{"field": "is_family_owned", "value": "true"}}
   - {{"field": "has_representative_owner", "value": "true"}}
   KEINE Finanz-Filter (revenue etc.) — Daten zu lückenhaft!
+  KEINE employees-Filter mit hohen Werten (min > 50) — Mitarbeiterdaten sind im Handelsregister lückenhaft und führen zu 0 Treffern! Wenn du nach größeren Firmen suchst, nutze stattdessen breitere Suchbegriffe.
 - "location": {{"latitude": 51.0, "longitude": 10.0, "radius": 500}} oder null (bundesweit)
 
 WICHTIG: Wir suchen NUR strategische Käufer (operative Unternehmen).
