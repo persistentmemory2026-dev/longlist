@@ -68,6 +68,7 @@ EMAIL_COLUMNS = [
 
 DOCUMENT_COLUMNS = [
     ("Dokumente (Links)", 50),
+    ("Dokumente (URLs)", 60),
 ]
 
 
@@ -88,11 +89,19 @@ def _fmt_eur(value: Any) -> str:
 
 
 def _safe(val: Any, default: str = "") -> str:
-    """Return val as string, or empty string if None/empty."""
+    """Return val as human-readable string, flattening dicts/lists."""
     if val is None or val == "" or val == []:
         return default
+    if isinstance(val, dict):
+        # Try common field names first
+        for key in ("name", "value", "text", "description", "url"):
+            if key in val and val[key]:
+                return str(val[key])
+        # Fallback: join non-empty key-value pairs
+        parts = [f"{v}" for v in val.values() if v and v is not True]
+        return ", ".join(parts) if parts else default
     if isinstance(val, list):
-        return ", ".join(str(v) for v in val)
+        return ", ".join(_safe(item) for item in val if item)
     return str(val)
 
 
@@ -217,7 +226,7 @@ def _extract_purposes(details: dict) -> str:
         texts = []
         for p in purposes:
             if isinstance(p, dict):
-                texts.append(p.get("text") or p.get("description") or str(p))
+                texts.append(p.get("text") or p.get("description") or p.get("value") or "")
             elif isinstance(p, str):
                 texts.append(p)
         return "; ".join(texts) if texts else ""
@@ -321,6 +330,22 @@ def _extract_documents(details: dict) -> str:
         elif isinstance(d, str):
             entries.append(d)
     return "\n".join(entries) if entries else ""
+
+
+def _extract_document_urls(details: dict) -> str:
+    """Extract only the raw URLs from details.documents list, semicolon-separated."""
+    docs = details.get("documents") or []
+    if not isinstance(docs, list):
+        return ""
+    urls = []
+    for d in docs:
+        if isinstance(d, dict):
+            url = d.get("url") or d.get("download_url") or d.get("link") or ""
+            if url:
+                urls.append(url)
+        elif isinstance(d, str) and d.startswith("http"):
+            urls.append(d)
+    return "; ".join(urls) if urls else ""
 
 
 def generate_excel(
@@ -452,8 +477,9 @@ def generate_excel(
         if includes_email:
             values.append(_safe(company.get("gf_email")))
 
-        # Document links (always included)
+        # Document links (always included) — two columns: hyperlinks + raw URLs
         values.append(_extract_documents(details))
+        values.append(_extract_document_urls(details))
 
         # Write values
         for col_idx, val in enumerate(values, 1):

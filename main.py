@@ -372,9 +372,18 @@ async def process_incoming_email(
             tested: list[dict[str, Any]] = []
             for alt in alternatives[:3]:
                 try:
+                    # Ensure all filter values are strings (OpenRegister API requirement)
+                    sanitized_filters = []
+                    for f in (alt.get("filters") or []):
+                        sf = dict(f)
+                        for k, v in sf.items():
+                            if isinstance(v, (int, float, bool)):
+                                sf[k] = str(v)
+                        sanitized_filters.append(sf)
+
                     result = run_preview_search(
                         query=alt.get("query", ""),
-                        filters=alt.get("filters"),
+                        filters=sanitized_filters,
                         location=alt.get("location"),
                         per_page=3,
                     )

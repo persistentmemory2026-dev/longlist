@@ -205,6 +205,10 @@ WICHTIG:
 - Verwende dasselbe JSON-Schema wie die Original-Suche
 - Immer status: "active" als Filter beibehalten
 - KEINE Finanz-Filter (revenue, balance_sheet_total) — die funktionieren nie
+- ALLE Filter-Werte MÜSSEN Strings sein (z.B. "50" nicht 50, "true" nicht true)
+- Mindestens eine Alternative MUSS location auf null setzen (bundesweite Suche)
+- Mindestens eine Alternative MUSS den query-Term durch ein Synonym/verwandten Begriff ersetzen
+- Halte Filter minimal — je weniger Filter, desto mehr Treffer
 
 Antworte NUR mit einem JSON-Array:
 ```json
