@@ -1,4 +1,6 @@
 """Longlist — Tavily + Claude: Analyze a target company for sell-side mandates."""
+from __future__ import annotations
+
 import json
 import logging
 from typing import Any

@@ -1,4 +1,6 @@
 """Longlist — Claude Call #1: Parse M&A briefing email into structured JSON."""
+from __future__ import annotations
+
 import json
 import logging
 from typing import Any

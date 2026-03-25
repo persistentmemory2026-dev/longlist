@@ -1,4 +1,6 @@
 """Longlist — Claude Call #2: Write delivery email for completed job."""
+from __future__ import annotations
+
 import logging
 
 import anthropic
