@@ -73,8 +73,13 @@ Quelle: OpenRegister Python SDK (`oregister/openregister-python`), abgeglichen m
       "legal_person": null
     }
   ],
-  "purpose": {"text": "..."},       // Aktueller Unternehmensgegenstand
-  "purposes": [{"text": "..."}],    // Historisch
+  "purpose": {                        // ⚠️ Feld heißt "purpose", NICHT "text"!
+    "purpose": "Vermittlung von...",
+    "start_date": "2015-02-03"
+  },
+  "purposes": [                      // Historisch, gleiches Format
+    {"purpose": "...", "start_date": "..."}
+  ],
   "indicators": [                    // ⚠️ Werte in CENTS! 2099 = 20,99 EUR
     {
       "date": "2023-12-31",
@@ -103,13 +108,18 @@ Quelle: OpenRegister Python SDK (`oregister/openregister-python`), abgeglichen m
     }
   ],
   "capital": {
-    "amount": "25000",               // String
-    "currency": "EUR"
+    "amount": 26000.0,               // ⚠️ Float, NICHT String!
+    "currency": "EUR",
+    "start_date": "2002-09-30"
   },
   "industry_codes": {
-    "wz2025": [                      // ⚠️ Verschachtelt unter "wz2025"
-      {"code": "62.01"},
-      {"code": "62.02"}
+    "wz2025": [                      // ⚠️ Verschachtelt, kommt doppelt (klein + groß)
+      {"code": "66.22"},
+      {"code": "66.19"}
+    ],
+    "WZ2025": [                      // Gleiches Array, groß geschrieben
+      {"code": "66.22"},
+      {"code": "66.19"}
     ]
   },
   "company_register": {
@@ -136,7 +146,7 @@ Quelle: OpenRegister Python SDK (`oregister/openregister-python`), abgeglichen m
   "url": "https://cap-register-documents.s3.eu-central-1.amazonaws.com/...?X-Amz-Expires=900"
 }
 ```
-**⚠️ URL gültig für 15 Minuten (900 Sekunden), nicht 30!**
+**URL gültig für 30 Minuten (`X-Amz-Expires=1800`). Proxy-Endpoint `/doc/{id}` holt jedes Mal frische URL.**
 
 ### Document Types (nur 3 existieren)
 | Type | Deutsch |
@@ -439,13 +449,16 @@ Sell-Side (geplant):
 
 ## Bekannte Gotchas
 
-1. **`details.name` ist ein Dict** — `{"name": "Firma", "legal_form": "gmbh"}`
-2. **Indicator-Werte in Cents** — `revenue: 1500000000` = 15.000.000,00 EUR, aber `employees` ist echte Zahl
-3. **Holdings `percentage_share` ist Faktor** — 0.5 = 50%, NICHT 50
-4. **Dokument-URLs sind temporär** — 15 Minuten Gültigkeit → Proxy-Endpoint `/doc/{id}` nutzen
-5. **Nur 3 Dokument-Typen** cached: `articles_of_association`, `sample_protocol`, `shareholder_list`
-6. **Alle Filter-Werte MÜSSEN Strings sein** — `"50"` nicht `50`
-7. **Keine Finanz-Filter für Suchen** — Revenue etc. zu lückenhaft
-8. **AgentMail Webhook immer 200 zurückgeben** — Sonst Svix-Retry-Loop
-9. **`industry_codes`** — Verschachtelt: `industry_codes.wz2025[].code`
-10. **Contact in Details enthalten** — Kein separater Contact-Endpoint nötig
+1. **`details.name` ist ein Dict** — `{"name": "Firma", "legal_form": "gmbh", "start_date": "..."}`
+2. **Indicator-Werte wahrscheinlich in Cents** — SDK-Doku sagt Cents, aber keine Live-Testdaten verfügbar (große Firmen haben oft 0 Indicators). `employees` ist echte Zahl.
+3. **Holdings `percentage_share` wahrscheinlich Faktor** — SDK sagt 0.5=50%, Live-Test steht aus (keine Holdings bei Testfirmen)
+4. **Owner `percentage_share` ist Prozent** — Live bestätigt: 100.0 = 100%
+5. **Dokument-URLs sind 30 Min gültig** — `X-Amz-Expires=1800`, Proxy-Endpoint `/doc/{id}` holt frische URL
+6. **Nur 3 Dokument-Typen** cached: `articles_of_association`, `sample_protocol`, `shareholder_list`
+7. **`purpose`-Feld heißt `.purpose`** — NICHT `.text`! Unser Code muss das korrigieren
+8. **`industry_codes` doppelt** — `wz2025` UND `WZ2025` (beides Arrays mit `{code: "..."}`)
+9. **`contact` ist oft None/leer** — Muss null-safe behandelt werden
+10. **`capital.amount` ist Float** — NICHT String (z.B. `26000.0`)
+11. **Alle Filter-Werte MÜSSEN Strings sein** — `"50"` nicht `50`
+12. **Keine Finanz-Filter für Suchen** — Revenue etc. zu lückenhaft
+13. **AgentMail Webhook immer 200 zurückgeben** — Sonst Svix-Retry-Loop
