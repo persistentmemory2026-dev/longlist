@@ -18,6 +18,11 @@ from agentmail_inbound import (
     verify_and_parse_agentmail_body,
 )
 from briefing_parser import parse_briefing
+from email_html import (
+    build_checkout_cta_plaintext,
+    build_delivery_email_html,
+    build_preview_email_html,
+)
 from email_writer import write_delivery_email, write_preview_email
 from pipeline import run_pipeline
 from preview_search import run_preview_search
@@ -179,14 +184,15 @@ async def process_incoming_email(
             service_type=service_type,
         )
 
-        email_html = email_body.replace("\n", "<br>")
+        email_plain = email_body + build_checkout_cta_plaintext(payment_urls)
+        email_html = build_preview_email_html(email_body, payment_urls)
 
         if thread_id:
             reply_result = await reply_to_thread(
                 thread_id=thread_id,
                 to_email=sender,
                 body_html=email_html,
-                body_text=email_body,
+                body_text=email_plain,
             )
             if reply_result.get("error"):
                 logger.error("Job %s: Reply failed: %s", job_id, reply_result["error"])
@@ -308,7 +314,7 @@ async def process_payment(
             search_summary=search_summary,
         )
 
-        delivery_html = delivery_body.replace("\n", "<br>")
+        delivery_html = build_delivery_email_html(delivery_body)
         excel_filename = os.path.basename(excel_path)
 
         if thread_id:

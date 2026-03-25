@@ -28,11 +28,13 @@ async def write_preview_email(
 ) -> str:
     """
     Write the preview/offer email after initial search.
-    Includes company count, preview names, and 3 Stripe payment links.
+    Includes company count, preview names, and package copy; payment URLs are appended in main.py.
     """
+    _ = payment_urls  # Checkout URLs appended in main.py (HTML + plaintext CTA)
+
     if not ANTHROPIC_API_KEY:
-        # Fallback template
-        return _preview_template(total_companies, preview_names, search_summary, payment_urls, service_type)
+        # Fallback template (URLs appended in main.py)
+        return _preview_template(total_companies, preview_names, search_summary, service_type)
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -43,12 +45,7 @@ Suchergebnis: {total_companies} Unternehmen gefunden
 Beispiel-Unternehmen: {', '.join(preview_names[:5])}
 Suchzusammenfassung: {search_summary}
 
-Zahlungslinks:
-- BASIS: {payment_urls.get('basis', '#')}
-- STANDARD: {payment_urls.get('standard', '#')}
-- PREMIUM: {payment_urls.get('premium', '#')}
-
-Paket-Beschreibungen:
+Paket-Beschreibungen (nur inhaltlich erklären, keine URLs oder Platzhalter):
 - BASIS (Stammdaten): Firma, Adresse, Geschäftsführer, Website, Telefon
 - STANDARD (+ Finanzen): zusätzlich Umsatz, Bilanz, Eigenkapital, Mitarbeiter
 - PREMIUM (+ Gesellschafter & GF-Email): zusätzlich Eigentümerstruktur und verifizierte GF-E-Mail
@@ -56,7 +53,8 @@ Paket-Beschreibungen:
 Regeln:
 - Nenne die genaue Anzahl gefundener Unternehmen
 - Liste 3-5 Beispielunternehmen auf
-- Stelle die 3 Pakete klar dar mit Preislinks
+- Stelle die 3 Pakete klar dar (BASIS, STANDARD, PREMIUM) — ohne Links, ohne „hier klicken“, ohne URL-Zeilen
+- Keine URLs, keine http(s)-Adressen — Zahlungslinks werden separat angefügt
 - Erwähne dass nach Zahlung die Daten innerhalb von 24h geliefert werden
 - Kein Betreff nötig (wird als Reply gesendet)
 - Sachlich, professionell, Sie-Form
@@ -111,28 +109,25 @@ def _preview_template(
     total: int,
     names: list[str],
     summary: str,
-    urls: dict[str, str],
     service_type: str,
 ) -> str:
-    """Fallback template when Claude API is unavailable."""
+    """Fallback template when Claude API is unavailable (no payment URLs — added in main)."""
     preview = "\n".join(f"  • {n}" for n in names[:5])
+    svc = "Longlist-Recherche" if service_type == "longlist" else "Datenanreicherung"
     return f"""Sehr geehrte Damen und Herren,
 
-vielen Dank für Ihre Anfrage. Basierend auf Ihren Kriterien ({summary}) haben wir {total} Unternehmen identifiziert.
+vielen Dank für Ihre Anfrage. Basierend auf Ihren Kriterien ({summary}) haben wir {total} Unternehmen identifiziert ({svc}).
 
 Hier ein Auszug:
 {preview}
 
-Wählen Sie Ihr gewünschtes Datenpaket:
+Wir bieten drei Datenpakete:
 
-📋 BASIS — Stammdaten, Adresse, GF, Website, Telefon
-→ {urls.get('basis', '#')}
+• BASIS — Stammdaten, Adresse, GF, Website, Telefon
+• STANDARD — zusätzlich Umsatz, Bilanz, EK, Mitarbeiter
+• PREMIUM — zusätzlich Gesellschafter und verifizierte GF-E-Mail
 
-📊 STANDARD — zusätzlich Umsatz, Bilanz, EK, Mitarbeiter
-→ {urls.get('standard', '#')}
-
-🏆 PREMIUM — zusätzlich Gesellschafter & verifizierte GF-Email
-→ {urls.get('premium', '#')}
+Die Zahlung können Sie über die Schaltflächen unter diesem Text auslösen.
 
 Nach Zahlungseingang liefern wir Ihnen die vollständige Excel-Datei innerhalb von 24 Stunden.
 
