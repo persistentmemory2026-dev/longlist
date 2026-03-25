@@ -171,7 +171,7 @@ def _extract_address(details: dict) -> tuple[str, str, str]:
 
 def _extract_contact_from_details(details: dict) -> tuple[str, str, str]:
     """Extract (website, phone, email) from details.contact sub-object."""
-    contact = details.get("contact", {})
+    contact = details.get("contact") or {}
     if isinstance(contact, dict):
         website = contact.get("website_url") or contact.get("website") or ""
         phone = contact.get("phone") or ""
@@ -199,21 +199,24 @@ def _extract_capital(details: dict) -> str:
 
 
 def _extract_industry_codes(details: dict) -> str:
-    """Extract industry/WZ codes from details.industry_codes."""
-    codes = details.get("industry_codes") or details.get("nace_codes") or []
-    if not isinstance(codes, list):
-        return _safe(codes)
+    """Extract industry/WZ codes from details.industry_codes.wz2025."""
+    ic = details.get("industry_codes") or {}
+    # API returns nested: {"wz2025": [{code: "62.01"}], "WZ2025": [...]}
+    if isinstance(ic, dict):
+        codes = ic.get("wz2025") or ic.get("WZ2025") or []
+    elif isinstance(ic, list):
+        codes = ic
+    else:
+        return _safe(ic)
     entries = []
     for c in codes:
         if isinstance(c, dict):
-            code = c.get("code") or c.get("wz_code") or c.get("nace_code") or ""
-            desc = c.get("description") or c.get("label") or c.get("name") or ""
+            code = c.get("code") or c.get("wz_code") or ""
+            desc = c.get("description") or c.get("label") or ""
             if code and desc:
                 entries.append(f"{code} — {desc}")
             elif code:
                 entries.append(str(code))
-            elif desc:
-                entries.append(desc)
         elif isinstance(c, str):
             entries.append(c)
     return ", ".join(entries) if entries else ""
@@ -226,7 +229,7 @@ def _extract_purposes(details: dict) -> str:
         texts = []
         for p in purposes:
             if isinstance(p, dict):
-                texts.append(p.get("text") or p.get("description") or p.get("value") or "")
+                texts.append(p.get("purpose") or p.get("text") or p.get("description") or "")
             elif isinstance(p, str):
                 texts.append(p)
         return "; ".join(texts) if texts else ""
