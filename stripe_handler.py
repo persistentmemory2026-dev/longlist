@@ -32,14 +32,14 @@ def create_checkout_sessions(
     Uses dynamic price_data with quantity = total_companies so the customer
     sees "X companies × Y €/company = total" on the Stripe checkout page.
 
-    Returns: {"basis": url, "standard": url, "premium": url}
+    Returns: {"basis": url, "kontakt": url, "deep_data": url}
     """
     if not STRIPE_SECRET_KEY:
         logger.warning("STRIPE_SECRET_KEY not set — returning dummy URLs")
         return {
             "basis": f"https://example.com/pay/basis/{job_id}",
-            "standard": f"https://example.com/pay/standard/{job_id}",
-            "premium": f"https://example.com/pay/premium/{job_id}",
+            "kontakt": f"https://example.com/pay/kontakt/{job_id}",
+            "deep_data": f"https://example.com/pay/deep_data/{job_id}",
         }
 
     # Ensure at least 1 company for the session
@@ -47,7 +47,7 @@ def create_checkout_sessions(
 
     urls: dict[str, str] = {}
 
-    for package_key in ("basis", "standard", "premium"):
+    for package_key in ("basis", "kontakt", "deep_data"):
         pkg = PACKAGES[package_key]
         unit_price = pkg["unit_price_eur_cents"]  # in EUR cents
 

@@ -183,11 +183,13 @@ def generate_excel(
 
     Returns the file path.
     """
-    includes_financials = package in ("standard", "premium")
-    includes_owners = package == "premium"
-    includes_ubos = package == "premium"
-    includes_holdings = package == "premium"
-    includes_email = package == "premium"
+    from config import PACKAGES
+    pkg = PACKAGES.get(package, {})
+    includes_financials = pkg.get("includes_financials", False)
+    includes_owners = pkg.get("includes_owners", False)
+    includes_ubos = pkg.get("includes_ubos", False)
+    includes_holdings = pkg.get("includes_holdings", False)
+    includes_email = pkg.get("includes_email_lookup", False)
 
     # Build column list
     columns = list(BASE_COLUMNS)

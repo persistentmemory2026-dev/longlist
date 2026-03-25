@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 import job_store
 from admin_auth import require_admin
@@ -71,6 +71,64 @@ async def health():
         "service": "longlist",
         "jobs_persisted": job_store.count_jobs(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Stripe redirect pages (branded HTML)
+# ---------------------------------------------------------------------------
+_BRAND_PAGE_STYLE = """
+  body { margin:0; padding:0; background-color:#faf9f6; font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
+         -webkit-font-smoothing:antialiased; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+  .card { background:#fff; border-radius:12px; border:1px solid rgba(24,24,27,0.08); padding:48px 40px;
+          max-width:480px; width:90%; text-align:center; box-shadow:0 2px 4px rgba(24,24,27,0.02); }
+  .logo { font-family:Georgia,'Times New Roman',serif; font-size:22px; color:#18181b; letter-spacing:-0.5px; margin-bottom:28px; }
+  .logo strong { font-weight:700; } .logo span { font-weight:300; }
+  .icon { font-size:48px; margin-bottom:16px; }
+  h1 { font-family:Georgia,'Times New Roman',serif; font-size:24px; font-weight:700; color:#18181b; margin:0 0 12px 0; }
+  p { font-size:15px; line-height:1.6; color:#71717a; margin:0 0 12px 0; }
+  .footer { margin-top:32px; font-size:12px; color:#71717a; }
+  a { color:#71717a; text-decoration:underline; }
+"""
+
+
+@app.get("/danke", response_class=HTMLResponse)
+async def danke_page():
+    """Stripe success redirect — thank you page."""
+    return f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vielen Dank — Longlist</title><style>{_BRAND_PAGE_STYLE}</style></head>
+<body><div class="card">
+  <div class="logo"><strong>Long</strong><span>list</span></div>
+  <div class="icon">&#10003;</div>
+  <h1>Vielen Dank!</h1>
+  <p>Ihre Zahlung war erfolgreich. Wir starten jetzt mit der Recherche und liefern Ihre Longlist innerhalb von 24 Stunden per E-Mail.</p>
+  <p>Sie erhalten die Rechnung separat per E-Mail von Stripe.</p>
+  <div class="footer">
+    <a href="https://longlist.email">longlist.email</a> &middot;
+    <a href="https://longlist.email/impressum">Impressum</a> &middot;
+    <a href="https://longlist.email/datenschutz">Datenschutz</a>
+  </div>
+</div></body></html>"""
+
+
+@app.get("/abgebrochen", response_class=HTMLResponse)
+async def abgebrochen_page():
+    """Stripe cancel redirect — checkout cancelled page."""
+    return f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checkout abgebrochen — Longlist</title><style>{_BRAND_PAGE_STYLE}</style></head>
+<body><div class="card">
+  <div class="logo"><strong>Long</strong><span>list</span></div>
+  <div class="icon">&#8617;</div>
+  <h1>Checkout abgebrochen</h1>
+  <p>Sie haben den Checkout-Vorgang abgebrochen. Keine Sorge — es wurde nichts berechnet.</p>
+  <p>Die Zahlungslinks in unserer E-Mail bleiben 23 Stunden gültig. Sie können den Vorgang jederzeit erneut starten.</p>
+  <div class="footer">
+    <a href="https://longlist.email">longlist.email</a> &middot;
+    <a href="https://longlist.email/impressum">Impressum</a> &middot;
+    <a href="https://longlist.email/datenschutz">Datenschutz</a>
+  </div>
+</div></body></html>"""
 
 
 # ---------------------------------------------------------------------------

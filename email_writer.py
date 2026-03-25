@@ -30,7 +30,7 @@ def _fmt_eur(cents: int) -> str:
 def _build_pricing_info(total_companies: int) -> str:
     """Build a pricing table string for the email prompt."""
     lines = []
-    for key in ("basis", "standard", "premium"):
+    for key in ("basis", "kontakt", "deep_data"):
         pkg = PACKAGES[key]
         unit = _fmt_eur(pkg["unit_price_eur_cents"])
         total = _fmt_eur(pkg["unit_price_eur_cents"] * total_companies)
@@ -74,7 +74,7 @@ Paket-Beschreibungen mit Preisen (pro Unternehmen × Anzahl = Gesamtpreis):
 Regeln:
 - Nenne die genaue Anzahl gefundener Unternehmen
 - Liste 3-5 Beispielunternehmen auf
-- Stelle die 3 Pakete klar dar (BASIS, STANDARD, PREMIUM) — mit dem Preis pro Unternehmen UND dem Gesamtpreis
+- Stelle die 3 Pakete klar dar (Basis, Kontakt, Deep Data) — mit dem Preis pro Unternehmen UND dem Gesamtpreis
 - Keine URLs, keine http(s)-Adressen — Zahlungslinks werden separat angefügt
 - Erwähne dass nach Zahlung die Daten innerhalb von 24h geliefert werden
 - Kein Betreff nötig (wird als Reply gesendet)
@@ -138,7 +138,7 @@ def _preview_template(
 
     # Build pricing lines
     pricing_lines = []
-    for key in ("basis", "standard", "premium"):
+    for key in ("basis", "kontakt", "deep_data"):
         pkg = PACKAGES[key]
         unit = _fmt_eur(pkg["unit_price_eur_cents"])
         total_price = _fmt_eur(pkg["unit_price_eur_cents"] * total)

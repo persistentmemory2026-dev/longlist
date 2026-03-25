@@ -36,24 +36,22 @@ LONGLIST_ADMIN_TOKEN = os.getenv("LONGLIST_ADMIN_TOKEN", "")
 STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", f"{APP_URL}/danke")
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", f"{APP_URL}/abgebrochen")
 
-# --- Per-Company Dynamic Pricing ---
-# Unit price per company in EUR cents (Stripe uses smallest currency unit)
-# OpenRegister API credits per company:
-#   Details=10, Financials=10, Owners=10, UBOs=25, Holdings=10
-# Margin included on top of API cost.
+# --- Per-Company Dynamic Pricing (aligned with website longlist.email) ---
+# Tier names match the website: Basis / Kontakt / Deep Data
+# OpenRegister API credits: Details=10, Owners=10, Financials=10, UBOs=25, Holdings=10
 PACKAGES = {
     "basis": {
-        "label": "BASIS",
-        "endpoints": ["details"],           # 10 credits (details includes contact data)
-        "description": "Stammdaten, Adresse, GF, Website, Telefon",
-        "description_long": "Firma, Rechtsform, HR-Nummer, Adresse, Geschäftsführer, Website, Telefon, Branche",
-        "stripe_product_name": "Longlist BASIS — Stammdaten",
+        "label": "Basis",
+        "endpoints": ["details"],                           # 10 credits
+        "description": "Firmendaten + KI-Scoring",
+        "description_long": "Firma, Rechtsform, HR-Nummer, Adresse, Geschäftsführer, Website, Telefon, Branche, KI-Scoring + Begründung",
+        "stripe_product_name": "Longlist Basis — Firmendaten + Scoring",
         "stripe_description": (
             "Grundlegende Unternehmensdaten pro Firma: "
             "Firmenname, Rechtsform, Handelsregister-Nr., "
-            "vollständige Adresse (Straße, PLZ, Stadt), "
-            "Geschäftsführer/Vertretungsberechtigte, "
-            "Website, Telefon, E-Mail, Branchencodes (WZ/NACE). "
+            "vollständige Adresse, Geschäftsführer, "
+            "Website, Telefon, Branchencodes (WZ/NACE), "
+            "KI-Relevanz-Scoring mit individueller Begründung. "
             "Lieferung als formatierte Excel-Datei innerhalb von 24h."
         ),
         "includes_financials": False,
@@ -61,37 +59,37 @@ PACKAGES = {
         "includes_ubos": False,
         "includes_holdings": False,
         "includes_email_lookup": False,
-        "unit_price_eur_cents": 150,        # 1,50 € per company
+        "unit_price_eur_cents": 150,                        # 1,50 € per company
     },
-    "standard": {
-        "label": "STANDARD",
-        "endpoints": ["details", "financials"],  # 20 credits
-        "description": "Stammdaten + Umsatz, Bilanz, EK, Mitarbeiter",
-        "description_long": "Alles aus BASIS + detaillierte Finanzdaten (Umsatz, Bilanzsumme, Eigenkapital, Jahresüberschuss, Mitarbeiter)",
-        "stripe_product_name": "Longlist STANDARD — Stammdaten + Finanzen",
+    "kontakt": {
+        "label": "Kontakt",
+        "endpoints": ["details", "owners"],                 # 20 credits
+        "description": "Firmendaten + GF-Kontakte + Gesellschafter",
+        "description_long": "Alles aus Basis + GF-Kontaktdaten + Gesellschafterstruktur mit Beteiligungshöhe",
+        "stripe_product_name": "Longlist Kontakt — Firmendaten + Kontakte",
         "stripe_description": (
-            "Alle Daten aus BASIS plus detaillierte Finanzdaten aus dem Bundesanzeiger: "
-            "Umsatz, Bilanzsumme, Eigenkapital, Jahresüberschuss, "
-            "Mitarbeiterzahl, Geschäftsjahr. "
-            "Ideal für die erste Einschätzung von Zielunternehmen. "
+            "Alle Daten aus Basis plus Kontaktdaten: "
+            "Geschäftsführer-Kontakte, "
+            "Gesellschafterstruktur mit Beteiligungshöhe. "
+            "Ideal für die erste Direktansprache im M&A-Prozess. "
             "Lieferung als formatierte Excel-Datei innerhalb von 24h."
         ),
-        "includes_financials": True,
-        "includes_owners": False,
+        "includes_financials": False,
+        "includes_owners": True,
         "includes_ubos": False,
         "includes_holdings": False,
         "includes_email_lookup": False,
-        "unit_price_eur_cents": 350,        # 3,50 € per company
+        "unit_price_eur_cents": 250,                        # 2,50 € per company
     },
-    "premium": {
-        "label": "PREMIUM",
+    "deep_data": {
+        "label": "Deep Data",
         "endpoints": ["details", "financials", "owners", "ubos", "holdings"],  # 65 credits
-        "description": "Stammdaten + Finanzen + Gesellschafter + UBOs + Beteiligungen + GF-Email",
-        "description_long": "Alles aus STANDARD + Gesellschafter, wirtschaftlich Berechtigte (UBOs), Beteiligungen/Töchter, verifizierte GF-E-Mail",
-        "stripe_product_name": "Longlist PREMIUM — Vollständiges Firmenprofil",
+        "description": "Firmendaten + Kontakte + Finanzen + UBOs + Beteiligungen + GF-Email",
+        "description_long": "Alles aus Kontakt + Finanzkennzahlen (Bundesanzeiger), wirtschaftlich Berechtigte (UBOs), Beteiligungen/Töchter, verifizierte GF-E-Mail",
+        "stripe_product_name": "Longlist Deep Data — Vollständiges Firmenprofil",
         "stripe_description": (
-            "Alle Daten aus STANDARD plus Eigentümerstruktur: "
-            "Gesellschafter mit Beteiligungshöhe, "
+            "Alle Daten aus Kontakt plus: "
+            "detaillierte Finanzkennzahlen aus dem Bundesanzeiger, "
             "wirtschaftlich Berechtigte (UBOs) über alle Beteiligungsebenen, "
             "Tochtergesellschaften und Beteiligungen, "
             "verifizierte Geschäftsführer-E-Mail-Adresse. "
@@ -103,7 +101,7 @@ PACKAGES = {
         "includes_ubos": True,
         "includes_holdings": True,
         "includes_email_lookup": True,
-        "unit_price_eur_cents": 900,        # 9,00 € per company
+        "unit_price_eur_cents": 400,                        # 4,00 € per company
     },
 }
 
