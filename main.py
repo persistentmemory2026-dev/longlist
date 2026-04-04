@@ -738,8 +738,8 @@ async def process_incoming_email(
 
         # With only longlist active, always process directly (no menu needed)
         logger.info(
-            "Job %s: Processing as %s (confidence: %.2f)",
-            job_id, confidence, service_type,
+            "Job %s: Processing as %s (confidence: %s)",
+            job_id, service_type, confidence,
         )
         await _run_service_flow(job_id, sender, subject, parsed, thread_id, service_type)
 

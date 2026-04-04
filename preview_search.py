@@ -52,7 +52,25 @@ def run_preview_search(
             "number_of_owners", "has_sole_owner", "has_representative_owner",
             "is_family_owned", "youngest_owner_age", "purpose",
         }
-        cleaned = [f for f in filters if f.get("field") in valid_filter_fields]
+        cleaned = []
+        for f in filters:
+            if f.get("field") not in valid_filter_fields:
+                continue
+            # Validate filter value types: must be str, list of str, or dict with str values
+            val = f.get("value") or f.get("values") or f.get("keywords")
+            min_v, max_v = f.get("min"), f.get("max")
+            if val is not None:
+                if isinstance(val, list) and not all(isinstance(v, str) for v in val):
+                    logger.warning("Stripped filter %s: list contains non-string values", f.get("field"))
+                    continue
+                if isinstance(val, str) and len(val) > 500:
+                    logger.warning("Stripped filter %s: value too long (%d chars)", f.get("field"), len(val))
+                    continue
+            if min_v is not None and not isinstance(min_v, str):
+                f["min"] = str(min_v)
+            if max_v is not None and not isinstance(max_v, str):
+                f["max"] = str(max_v)
+            cleaned.append(f)
         if len(cleaned) != len(filters):
             logger.warning("Stripped %d invalid filters", len(filters) - len(cleaned))
         body["filters"] = cleaned

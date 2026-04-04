@@ -185,30 +185,9 @@ parsing → preview_done → offer_sent → ... (high-confidence skip, >= 0.95)
 
 ## Service Routing
 
-Longlist supports 4 service types, determined by briefing analysis:
+**Currently only `longlist` is active.** Other service types (enrichment, sell_side, file_enrichment) are disabled while we focus on search quality. The code is preserved for future re-activation.
 
-| Service Type | Description |
-|---|---|
-| `enrichment` | Standard company enrichment from search criteria |
-| `sell_side` | Sell-side buyer longlist for M&A transactions |
-| `longlist` | General longlist research request |
-| `file_enrichment` | Enrich companies from an uploaded Excel/CSV file |
-
-**Confidence-based routing:**
-- Claude AI parses the briefing and returns a confidence score (0.0 - 1.0) for the detected service type
-- **Confidence >= 0.95:** Skip menu, proceed directly to processing (existing flow)
-- **Confidence < 0.95:** Send a Smart Service Menu email with CTA buttons for each applicable service
-
-**Heuristic overrides:**
-- Sell-side classification without explicit sell-side keywords downgrades to `enrichment`
-- A single-company mention caps confidence below the skip threshold (forces menu)
-
-**Attachment detection:**
-- Incoming emails are scanned for spreadsheet attachments (`.xlsx`, `.xls`, `.csv`)
-- When an attachment is detected, the Smart Service Menu highlights "Firmenliste anreichern" (file enrichment)
-- `attachment_parser.py` handles parsing of Excel and CSV files to extract company lists
-
-**CTA endpoint:** `/select/{job_id}/{service_type}` — Each button in the menu links here; clicking sets the job to `service_selected` and triggers the appropriate pipeline
+All incoming briefings are routed directly to Longlist-Recherche processing (no Smart Service Menu).
 
 ## Important Decisions
 

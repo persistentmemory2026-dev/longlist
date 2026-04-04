@@ -59,7 +59,7 @@ Email-based Research-as-a-Service for German M&A advisors. Clients send a resear
   - Owners use `percentage_share` (not `share_percent`), with nested `legal_person`/`natural_person`
 - Dual DB backend: auto-detects PostgreSQL via `DATABASE_URL` env var, falls back to SQLite
 - Dynamic Stripe pricing uses `price_data` with `product_data`, not pre-created prices
-- Confidence-based routing: >= 0.95 skips service menu, < 0.95 sends Smart Service Menu
+- Only `longlist` service is active — other services (enrichment, sell_side, file_enrichment) disabled
 
 ### Testing Requirements
 - Run all tests: `pytest tests/ -q`
@@ -68,7 +68,7 @@ Email-based Research-as-a-Service for German M&A advisors. Clients send a resear
 
 ### Common Patterns
 - Job status flow: `parsing → awaiting_service_selection → service_selected → preview_done → offer_sent → paid → enriched → excel_ready → delivered`
-- 4 service types: `enrichment`, `sell_side`, `longlist`, `file_enrichment`
+- Only `longlist` service active (enrichment, sell_side, file_enrichment disabled)
 - 3 pricing tiers: Basis (1.50€), Kontakt (2.50€), Deep Data (4.00€)
 
 ## Dependencies
