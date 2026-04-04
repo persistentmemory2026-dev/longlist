@@ -3,9 +3,8 @@ import json
 import logging
 from typing import Any
 
-import anthropic
-
 from config import ANTHROPIC_API_KEY
+from ai_client import create_message
 
 logger = logging.getLogger("longlist.buyer_groups")
 
@@ -21,19 +20,20 @@ Für jede Käufergruppe erstelle ein Objekt mit:
 - "name": Kurzer deutscher Gruppenname (max 35 Zeichen)
 - "description": 1 Satz — wer sind diese Käufer?
 - "rationale": 1 Satz — warum wären sie an diesem Unternehmen interessiert?
-- "query": Suchbegriff(e) für die Handelsregister-Datenbank
+- "query": Firmenname ODER leer ("") — WICHTIG: Sucht NUR nach Firmennamen, NICHT nach Branchen/Keywords!
+  Nur verwenden wenn nach einem konkreten Firmennamen gesucht wird. Sonst leer lassen ("").
 - "filters": Array von Filtern (ALLE Werte MÜSSEN Strings sein!)
   Verfügbare Felder:
   - {{"field": "status", "value": "active"}} (IMMER setzen)
-  - {{"field": "employees", "min": "100", "max": "5000"}}
-  - {{"field": "industry_codes", "value": "62"}} (WZ-Code, 2-stellig)
+  - {{"field": "purpose", "keywords": ["Keyword1", "Keyword2"]}} — Keyword-Suche im Unternehmensgegenstand! WICHTIGSTES Suchfeld!
+    WICHTIG: Immer "keywords" (nicht "value") verwenden — "value" macht exakten Match und liefert kaum Treffer!
   - {{"field": "legal_form", "value": "gmbh"}}
   - {{"field": "is_family_owned", "value": "true"}}
   - {{"field": "has_representative_owner", "value": "true"}}
   KEINE Finanz-Filter (revenue etc.) — Daten zu lückenhaft!
-  KEINE employees-Filter — Mitarbeiterdaten sind im Handelsregister lückenhaft!
-  Verwende ENTWEDER "query" ODER "industry_codes", NICHT beides zusammen — die Kombination ergibt oft 0 Treffer!
-  Bevorzuge "query" mit präzisen Suchbegriffen. Nutze "industry_codes" nur wenn der query leer ist.
+  KEINE employees-Filter — nur 2% der Firmen haben Mitarbeiterdaten!
+  KEINE industry_codes-Filter — WZ-Codes sind unzuverlässig zugeordnet, viele Firmen ohne Codes!
+  Bevorzuge "purpose" mit "keywords" für präzise deutsche Keywords zum Unternehmensgegenstand.
 - "location": {{"latitude": 51.0, "longitude": 10.0, "radius": 500}} oder null (bundesweit)
 
 WICHTIG: Wir suchen NUR strategische Käufer (operative Unternehmen).
@@ -53,11 +53,12 @@ Denke wie ein M&A-Berater:
 
 Regeln:
 - Mindestens 3, maximal 5 Gruppen
-- Jede Gruppe muss sich deutlich unterscheiden (verschiedene query + filters)
+- Jede Gruppe muss sich deutlich unterscheiden (verschiedene purpose-Keywords + filters)
 - Gruppen nach erwarteter Relevanz sortieren (beste zuerst)
 - Mindestens eine Gruppe bundesweit (location: null)
 - Filter minimal halten — je weniger Filter, desto mehr Treffer
 - NUR operative Unternehmen, KEINE Investoren/Fonds
+- "query" fast immer leer ("") — Branchen-Suche geht über "purpose" Filter!
 
 Antworte NUR mit dem JSON-Array."""
 
@@ -68,25 +69,17 @@ async def define_buyer_groups(
     """
     Define 3-5 buyer groups with OpenRegister search criteria based on target analysis.
     """
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
-
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-
     user_msg = _GROUPS_PROMPT.format(
         target_json=json.dumps(target_analysis, ensure_ascii=False, indent=2),
     )
 
     logger.info("Defining buyer groups for: %s", target_analysis.get("name", "?"))
 
-    response = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=3000,
+    raw_text = await create_message(
         system=_SYSTEM,
-        messages=[{"role": "user", "content": user_msg}],
+        user_msg=user_msg,
+        max_tokens=3000,
     )
-
-    raw_text = response.content[0].text.strip()
     if raw_text.startswith("```"):
         lines = raw_text.split("\n")
         lines = [l for l in lines if not l.startswith("```")]
@@ -136,18 +129,9 @@ async def parse_buyer_selection(
     Input: "60 Strategische, 40 Angrenzende, 20 PE"
     Returns: [{"group_index": 0, "count": 60}, {"group_index": 1, "count": 40}, ...]
     """
-    if not ANTHROPIC_API_KEY:
-        return []
-
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-
     group_names = [f'{i}: "{g["name"]}" (max {g.get("available", "?")})' for i, g in enumerate(buyer_groups)]
 
-    response = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=500,
-        system="Du parsed Kundenantworten. Antworte NUR mit JSON-Array.",
-        messages=[{"role": "user", "content": f"""Der Kunde hat auf unsere Käufergruppen-Übersicht geantwortet.
+    user_msg = f"""Der Kunde hat auf unsere Käufergruppen-Übersicht geantwortet.
 
 Verfügbare Gruppen:
 {chr(10).join(group_names)}
@@ -161,10 +145,18 @@ Parse die Antwort und gib ein JSON-Array zurück:
 Wenn der Kunde eine Gesamtanzahl nennt (z.B. "150 gesamt"), verteile proportional
 auf alle Gruppen basierend auf den verfügbaren Treffern.
 
-Antworte NUR mit dem JSON-Array."""}],
-    )
+Antworte NUR mit dem JSON-Array."""
 
-    raw_text = response.content[0].text.strip()
+    try:
+        raw_text = await create_message(
+            system="Du parsed Kundenantworten. Antworte NUR mit JSON-Array.",
+            user_msg=user_msg,
+            max_tokens=500,
+        )
+    except RuntimeError:
+        return []
+
+    raw_text = raw_text.strip()
     if raw_text.startswith("```"):
         lines = raw_text.split("\n")
         lines = [l for l in lines if not l.startswith("```")]

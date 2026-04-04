@@ -52,6 +52,11 @@ build/
 skills/
 skills-lock.json
 
+# Empty scaffolding (not yet implemented)
+buyer-research/frontend/
+buyer-research/.github/
+buyer-research/backend/tests/
+
 # Data & Output
 *.xlsx
 *.log

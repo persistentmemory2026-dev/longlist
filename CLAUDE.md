@@ -37,7 +37,10 @@ npm i -g vercel                           # Vercel CLI
 ## Architecture
 
 ```
-Client Email → AgentMail Webhook → Claude AI (parse briefing)
+Client Email → AgentMail Webhook → Claude AI (parse briefing + confidence score)
+  → Confidence >= 0.95: Direct processing (existing flow)
+  → Confidence < 0.95: Smart Service Menu email → User clicks CTA → Processing
+  → Attachment detected: Menu with "Firmenliste anreichern" highlighted
   → OpenRegister Search (preview) → Stripe Checkout Links
   → Reply with offer email → Client pays via Stripe
   → Stripe Webhook → Pipeline: enrich all companies via OpenRegister
@@ -94,11 +97,12 @@ Nr., Firma, Rechtsform, Handelsregister, Adresse, PLZ, Stadt, Geschäftsführer,
 | `anymailfinder_client.py` | GF email lookup |
 | `preview_search.py` | OpenRegister company search for preview |
 | `briefing_parser.py` | Claude AI briefing parsing |
+| `attachment_parser.py` | Excel/CSV attachment parsing for file upload enrichment |
+| `USER_FLOWS.md` | Flow visualization and service routing documentation |
 
-## OpenRegister API Response Structure (IMPORTANT)
+## OpenRegister API (IMPORTANT)
 
-The actual API responses differ from naive expectations. Key gotchas:
-
+### Response Structure Gotchas
 - `details.name` is a **dict**: `{"name": "Firma GmbH", "legal_form": "gmbh"}` — NOT a string
 - Address uses `postal_code` (not `zip_code`), `street` includes house number
 - Contact uses `website_url` (not `website`)
@@ -106,6 +110,14 @@ The actual API responses differ from naive expectations. Key gotchas:
 - `details.indicators[]` list contains financial summaries (revenue, balance_sheet_total, equity, employees, date)
 - `details.documents[]` list contains document references with URLs
 - Details endpoint (10 credits) already includes contact data — no separate contact endpoint needed
+
+### Search API (verified 2026-04-04 with 33 live queries)
+- **`query` is the most important parameter** — searches company names, broadest results
+- **Safe filters:** `status=active`, `legal_form`, `location`, `incorporated_at`
+- **Moderate filters:** `has_representative_owner`, `youngest_owner_age`, `is_family_owned`
+- **NEVER use as filters:** `employees` (2% coverage!), `industry_codes` (unreliable WZ codes), `revenue`, `balance_sheet_total`
+- **Max 3 filters** — each filter roughly halves results
+- See `ARCHITECTURE.md` for full verified search behavior
 
 ## Database Schema (PostgreSQL)
 
@@ -162,10 +174,20 @@ Optional:
 ## Job Status Flow
 
 ```
-parsing → preview_done → offer_sent → paid → enriched → excel_ready → delivered
+parsing → awaiting_service_selection → service_selected → preview_done → offer_sent → paid → enriched → excel_ready → delivered
+parsing → preview_done → offer_sent → ... (high-confidence skip, >= 0.95)
                        → no_results (0 Treffer → Rückfrage gesendet)
                        → error (if failure)
 ```
+
+- `awaiting_service_selection` — Smart Service Menu sent, waiting for user to click a CTA
+- `service_selected` — User clicked a service button, processing continues
+
+## Service Routing
+
+**Currently only `longlist` is active.** Other service types (enrichment, sell_side, file_enrichment) are disabled while we focus on search quality. The code is preserved for future re-activation.
+
+All incoming briefings are routed directly to Longlist-Recherche processing (no Smart Service Menu).
 
 ## Important Decisions
 

@@ -4,20 +4,25 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from openregister import Openregister
+import httpx
 from config import OPENREGISTER_API_KEY
 
 logger = logging.getLogger("longlist.preview")
 
+_SEARCH_URL = "https://api.openregister.de/v1/search/company"
+
 
 def run_preview_search(
-    query: str,
+    query: str | None,
     filters: list[dict[str, Any]] | None = None,
     location: dict[str, float] | None = None,
     per_page: int = 5,
 ) -> dict[str, Any]:
     """
     Run an Advanced Filter Search (10 credits per query).
+
+    Uses httpx directly instead of the SDK to avoid SequenceNotStr
+    type-transform bug on Python <3.11 when using purpose keywords.
 
     Returns:
         {
@@ -26,32 +31,68 @@ def run_preview_search(
             "raw": <full API response>
         }
     """
-    client = Openregister(api_key=OPENREGISTER_API_KEY)
+    headers = {
+        "Authorization": f"Bearer {OPENREGISTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
-    search_kwargs: dict[str, Any] = {
-        "query": {"value": query},
+    body: dict[str, Any] = {
         "pagination": {"page": 1, "per_page": per_page},
     }
+    if query:
+        body["query"] = {"value": query}
     if filters:
-        search_kwargs["filters"] = filters
+        # Strip any invalid filter fields (location is NOT a filter, it's a top-level param)
+        valid_filter_fields = {
+            "status", "legal_form", "register_number", "register_court", "register_type",
+            "city", "active", "incorporated_at", "zip", "address", "balance_sheet_total",
+            "revenue", "cash", "employees", "equity", "real_estate", "materials",
+            "pension_provisions", "salaries", "taxes", "liabilities", "capital_reserves",
+            "net_income", "industry_codes", "capital_amount", "capital_currency",
+            "number_of_owners", "has_sole_owner", "has_representative_owner",
+            "is_family_owned", "youngest_owner_age", "purpose",
+        }
+        cleaned = []
+        for f in filters:
+            if f.get("field") not in valid_filter_fields:
+                continue
+            # Validate filter value types: must be str, list of str, or dict with str values
+            val = f.get("value") or f.get("values") or f.get("keywords")
+            min_v, max_v = f.get("min"), f.get("max")
+            if val is not None:
+                if isinstance(val, list) and not all(isinstance(v, str) for v in val):
+                    logger.warning("Stripped filter %s: list contains non-string values", f.get("field"))
+                    continue
+                if isinstance(val, str) and len(val) > 500:
+                    logger.warning("Stripped filter %s: value too long (%d chars)", f.get("field"), len(val))
+                    continue
+            if min_v is not None and not isinstance(min_v, str):
+                f["min"] = str(min_v)
+            if max_v is not None and not isinstance(max_v, str):
+                f["max"] = str(max_v)
+            cleaned.append(f)
+        if len(cleaned) != len(filters):
+            logger.warning("Stripped %d invalid filters", len(filters) - len(cleaned))
+        body["filters"] = cleaned
     if location:
-        search_kwargs["location"] = location
+        body["location"] = location
 
     logger.info("Preview search: query=%s, filters=%s, location=%s", query, filters, location)
 
-    result = client.search.find_companies_v1(**search_kwargs)
+    resp = httpx.post(_SEARCH_URL, headers=headers, json=body, timeout=15)
+    resp.raise_for_status()
+    result = resp.json()
 
-    total = result.pagination.total_results if hasattr(result, "pagination") else 0
+    total = result.get("pagination", {}).get("total_results", 0)
     preview = []
-    for r in result.results or []:
+    for r in result.get("results", []):
         entry = {
-            "name": getattr(r, "name", ""),
-            "company_id": getattr(r, "company_id", ""),
-            "city": getattr(r, "city", ""),
+            "name": r.get("name", ""),
+            "company_id": r.get("company_id", ""),
+            "city": r.get("city", ""),
         }
-        # Include legal_form if available
-        if hasattr(r, "legal_form"):
-            entry["legal_form"] = r.legal_form
+        if "legal_form" in r:
+            entry["legal_form"] = r["legal_form"]
         preview.append(entry)
 
     logger.info("Preview search found %d total companies", total)
@@ -59,5 +100,5 @@ def run_preview_search(
     return {
         "total": total,
         "preview_companies": preview,
-        "raw": result.model_dump() if hasattr(result, "model_dump") else str(result),
+        "raw": result,
     }
