@@ -398,3 +398,176 @@ def build_delivery_email_html(body_plain: str) -> str:
     """Branded HTML for delivery email — content only, no payment block."""
     inner = plain_paragraphs_to_html(body_plain)
     return _email_wrapper(inner)
+
+
+# ---------------------------------------------------------------------------
+# Smart Service Menu — email with CTA buttons for service selection
+# ---------------------------------------------------------------------------
+
+# Only longlist is active — other services disabled while we focus on search quality
+_SERVICE_MENU_ITEMS = [
+    {
+        "key": "longlist",
+        "label": "Longlist-Recherche",
+        "desc": "Firmen nach Branche, Region und weiteren Kriterien suchen und anreichern.",
+        "price": "Ab 1,50\u202f\u20ac/Firma",
+        "use_case": "Ideal für: Marktanalyse, Wettbewerberrecherche, M&A-Longlist",
+    },
+]
+
+# Disabled services — kept for future re-activation
+_DISABLED_SERVICE_MENU_ITEMS = [
+    {
+        "key": "enrichment",
+        "label": "Datenanreicherung",
+        "desc": "Firmendaten, Kontakte & Finanzen für die genannte(n) Firma(en) recherchieren.",
+        "price": "Ab 1,50\u202f\u20ac/Firma",
+        "use_case": "Ideal für: Due-Diligence-Vorbereitung, Marktüberblick",
+    },
+    {
+        "key": "sell_side",
+        "label": "Käufersuche (Sell-Side)",
+        "desc": "Potenzielle Käufer für Ihr Zielunternehmen identifizieren und kategorisieren.",
+        "price": "Ab 1,50\u202f\u20ac/Käufer",
+        "use_case": "Ideal für: Sell-Side Mandate, Käuferlisten",
+    },
+    {
+        "key": "file_enrichment",
+        "label": "Firmenliste anreichern",
+        "desc": "Ihre Excel- oder CSV-Datei hochladen und Firmendaten anreichern lassen.",
+        "price": "Ab 1,50\u202f\u20ac/Firma",
+        "use_case": "Ideal für: Bestehende Listen vervollständigen",
+    },
+]
+
+
+def _service_menu_card(
+    item: dict,
+    select_url: str,
+    is_recommended: bool = False,
+) -> str:
+    """Render a single service option card."""
+    safe_href = html.escape(select_url, quote=True)
+
+    recommended_badge = ""
+    border_color = _BORDER_STRONG
+    if is_recommended:
+        recommended_badge = (
+            f'<span style="display:inline-block;background-color:{_BRAND_GREEN};color:{_TEXT_LIGHT};'
+            f'font-family:{_FONT_BASE};font-size:11px;font-weight:600;padding:2px 10px;'
+            f'border-radius:9999px;margin-bottom:8px;letter-spacing:0.3px;">Empfohlen</span><br>'
+        )
+        border_color = _BRAND_GREEN
+
+    return f"""<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+  style="margin-bottom:12px;">
+  <tr><td style="border:{'2px' if is_recommended else '1px'} solid {border_color};border-radius:10px;padding:20px 24px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+      <tr>
+        <td style="vertical-align:top;">
+          {recommended_badge}
+          <p style="margin:0 0 4px 0;font-family:{_FONT_BASE};font-size:16px;font-weight:700;color:{_TEXT_MAIN};">
+            {html.escape(item['label'])}
+          </p>
+          <p style="margin:0 0 6px 0;font-family:{_FONT_BASE};font-size:14px;color:{_TEXT_MAIN};line-height:1.5;">
+            {html.escape(item['desc'])}
+          </p>
+          <p style="margin:0 0 4px 0;font-family:{_FONT_BASE};font-size:13px;color:{_TEXT_MUTED};">
+            {html.escape(item['price'])} · {html.escape(item['use_case'])}
+          </p>
+        </td>
+        <td style="vertical-align:middle;text-align:right;width:160px;padding-left:16px;">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+            <tr><td style="border-radius:8px;background-color:{_BRAND_GREEN};text-align:center;">
+              <a href="{safe_href}" target="_blank" rel="noopener noreferrer"
+                 style="display:block;padding:12px 20px;font-family:{_FONT_BASE};
+                        font-size:13px;font-weight:600;color:{_TEXT_LIGHT};text-decoration:none;white-space:nowrap;">
+                Auswählen
+              </a>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>"""
+
+
+def build_service_menu_email_html(
+    body_plain: str,
+    job_id: str,
+    app_url: str,
+    recommended_service: str | None = None,
+    show_file_upload: bool = False,
+) -> str:
+    """Branded HTML for the Smart Service Menu email.
+
+    Args:
+        body_plain: Intro text (plain text, will be converted to HTML paragraphs).
+        job_id: Job ID for building selection URLs.
+        app_url: Base URL for the app (e.g. https://longlist-production.up.railway.app).
+        recommended_service: Key of the recommended service (enrichment/sell_side/longlist/file_enrichment).
+        show_file_upload: Whether to show the file upload option.
+    """
+    prose = plain_paragraphs_to_html(body_plain)
+
+    items = [i for i in _SERVICE_MENU_ITEMS if show_file_upload or i["key"] != "file_enrichment"]
+
+    # Sort so recommended is first
+    if recommended_service:
+        items = sorted(items, key=lambda i: i["key"] != recommended_service)
+
+    cards = []
+    for item in items:
+        url = f"{app_url}/select/{job_id}/{item['key']}"
+        cards.append(_service_menu_card(
+            item=item,
+            select_url=url,
+            is_recommended=(item["key"] == recommended_service),
+        ))
+
+    menu_html = f"""
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:24px;">
+  <tr><td>
+    <p style="margin:0 0 16px 0;font-family:{_FONT_DISPLAY};font-size:18px;font-weight:700;color:{_TEXT_MAIN};">
+      Welchen Service benötigen Sie?
+    </p>
+  </td></tr>
+  <tr><td>
+    {''.join(cards)}
+  </td></tr>
+</table>
+<p style="margin:16px 0 0 0;font-family:{_FONT_BASE};font-size:12px;color:{_TEXT_MUTED};text-align:center;">
+  Oder antworten Sie einfach auf diese E-Mail mit Ihrem Wunsch.
+</p>"""
+
+    divider = f"""
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;">
+  <tr><td style="border-top:1px solid {_BORDER_SUBTLE};"></td></tr>
+</table>"""
+
+    inner = f'{prose}\n{divider}\n{menu_html}'
+    return _email_wrapper(inner)
+
+
+def build_service_menu_plaintext(
+    body_plain: str,
+    job_id: str,
+    app_url: str,
+    recommended_service: str | None = None,
+    show_file_upload: bool = False,
+) -> str:
+    """Plaintext version of the service menu email."""
+    lines = [body_plain, "", "---", "", "Welchen Service benötigen Sie?", ""]
+    items = [i for i in _SERVICE_MENU_ITEMS if show_file_upload or i["key"] != "file_enrichment"]
+    for item in items:
+        prefix = ">> " if item["key"] == recommended_service else "   "
+        rec = " (Empfohlen)" if item["key"] == recommended_service else ""
+        url = f"{app_url}/select/{job_id}/{item['key']}"
+        lines.append(f"{prefix}{item['label']}{rec}")
+        lines.append(f"   {item['desc']}")
+        lines.append(f"   {item['price']} · {item['use_case']}")
+        lines.append(f"   → {url}")
+        lines.append("")
+    lines.append("Oder antworten Sie einfach auf diese E-Mail mit Ihrem Wunsch.")
+    return "\n".join(lines)

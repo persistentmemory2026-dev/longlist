@@ -5,8 +5,8 @@ import json
 import logging
 from typing import Any
 
-import anthropic
 from config import ANTHROPIC_API_KEY
+from ai_client import create_message
 
 logger = logging.getLogger("longlist.parser")
 
@@ -14,13 +14,16 @@ SYSTEM_PROMPT = """Du bist der Briefing-Parser von Longlist, einem Research-as-a
 
 Deine Aufgabe: Analysiere die eingehende E-Mail und extrahiere strukturierte Suchparameter für die OpenRegister API.
 
-## Entscheidung 1: Service-Typ
-- "enrichment" (Service 1): Kunde liefert eine LISTE konkreter Firmennamen → wir reichern diese an
-- "longlist" (Service 2): Kunde beschreibt KRITERIEN → wir suchen passende Unternehmen
-- "sell_side" (Service 3): Kunde liefert ein ZIELUNTERNEHMEN (URL oder Name) und will potenzielle KÄUFER finden.
-  Erkenne an: "Käufer finden", "Buyer-Longlist", "Sell-Side", "Mandat verkaufen", "potenzielle Käufer",
-  "potenzielle Erwerber", "wer könnte kaufen", "Übernahme-Kandidaten", "Akquisiteure",
-  "Käuferliste erstellen", "Interessenten finden"
+## Service-Typ
+
+Setze service_type IMMER auf "longlist". Wir bieten aktuell nur Longlist-Recherche an.
+Wenn der Kunde konkrete Firmennamen nennt, setze sie trotzdem in "company_list" — wir nutzen das als Kontext.
+
+Bestimme eine Konfidenz (0.0 bis 1.0) wie gut du die Suchanfrage verstehst:
+- 0.95+: Klare Branche + Region + ggf. Rechtsform → direkte Verarbeitung
+- 0.80-0.95: Branche klar, Details etwas unklar
+- 0.50-0.80: Ambig — unklar was genau gesucht wird
+- <0.50: Sehr unklar
 
 ## Entscheidung 2: Suchparameter extrahieren
 
@@ -29,6 +32,7 @@ Gib ein JSON-Objekt zurück mit genau dieser Struktur:
 ```json
 {
   "service_type": "longlist" | "enrichment" | "sell_side",
+  "confidence": 0.85,
   "target_company_url": "https://zielunternehmen.de" | null,
   "target_company_name": "Zielunternehmen GmbH" | null,
   "desired_count": 200 | null,
@@ -46,26 +50,90 @@ Gib ein JSON-Objekt zurück mit genau dieser Struktur:
 }
 ```
 
-## Filter-Felder (alle Werte MÜSSEN Strings sein!)
+## Wie die OpenRegister-Suche WIRKLICH funktioniert (verifiziert mit Live-API)
 
-- status: "active" (Standard, immer setzen)
-- legal_form: ag, eg, ek, ev, ewiv, foreign, gbr, ggmbh, gmbh, kg, kgaa, llp, municipal, ohg, se, ug
-- employees: {"field": "employees", "min": "50", "max": "500"}
-- incorporated_at: {"field": "incorporated_at", "max": "2000-01-01"} für "etabliert"
-- youngest_owner_age: {"field": "youngest_owner_age", "min": "60"} für "GF über 60"
-- has_sole_owner: "true"/"false"
-- has_representative_owner: "true" für "inhabergeführt"
-- is_family_owned: "true" für "Familienunternehmen"
-- number_of_owners: min/max
-- industry_codes: {"field": "industry_codes", "value": "28"} (WZ-Code)
-- city, zip: {"field": "city", "value": "München"}
-- purpose: {"field": "purpose", "value": ["keywords"]}
+Es gibt ZWEI Hauptwerkzeuge — `query` und `purpose keywords`. Sie suchen an VERSCHIEDENEN Stellen:
+- `query`: sucht im FIRMENNAMEN (z.B. "Maschinenbau" findet "H. F. Meyer Maschinenbau GmbH")
+- `purpose keywords`: sucht im UNTERNEHMENSGEGENSTAND (z.B. "Software" findet Firmen die Software entwickeln, auch wenn "Software" nicht im Namen steht)
 
-WICHTIG — NICHT als Filter verwenden (Daten zu lückenhaft, führt zu 0 Ergebnissen):
-- revenue (Umsatz) → stattdessen in "notes" erwähnen
-- balance_sheet_total → stattdessen in "notes" erwähnen
-- capital_amount → stattdessen in "notes" erwähnen
-Wenn der Kunde Umsatz-/Finanzkriterien nennt, schreibe sie in die "notes" aber NICHT in die filters.
+### Drei Suchstrategien — wähle je nach Anfrage die beste
+
+**Strategie A — Breit (Standard für Industrie/Handwerk):**
+Wenn der Branchenbegriff typischerweise im Firmennamen vorkommt (Maschinenbau, Bäckerei, Immobilien).
+→ Nutze `query` als Hauptwerkzeug + sichere Filter.
+Beispiel: "Maschinenbauunternehmen in Bayern" → query="Maschinenbau" + location Bayern
+
+**Strategie B — Präzision (wenn Kunde spezifische Tätigkeiten nennt):**
+Wenn der Kunde eine konkrete Tätigkeit beschreibt (CNC-Fertigung, Kältetechnik, Spritzguss).
+→ Nutze `query` für die Branche + `purpose keywords` für die spezifische Tätigkeit.
+Beispiel: "CNC-Fräser im Maschinenbau" → query="Maschinenbau" + purpose keywords=["CNC", "Fräsen"]
+ACHTUNG: Diese Kombination ist SEHR präzise (wenige Ergebnisse). Nur verwenden wenn Kunde explizit spezifisch sucht.
+
+**Strategie C — Maximale Abdeckung (für Dienstleistungen/IT/Beratung):**
+Wenn der Branchenbegriff SELTEN im Firmennamen vorkommt (Software, Beratung, Logistik).
+→ Nutze `purpose keywords` als Hauptwerkzeug (OHNE query) + sichere Filter.
+Beispiel: "Softwareunternehmen in NRW" → purpose keywords=["Software", "Softwareentwicklung"] + location NRW
+WICHTIG: purpose keywords nutzt OR-Logik — mehr Keywords = mehr Ergebnisse! Gib 2-3 Synonyme an.
+
+### Wann welche Strategie?
+
+| Branche | Strategie | Grund |
+|---------|-----------|-------|
+| Maschinenbau, Bäckerei, Immobilien, Handwerk | A (query) | Begriff steht oft im Firmennamen |
+| Software, IT, Beratung, Marketing, Dienstleistung | C (purpose keywords) | Begriff steht selten im Firmennamen, aber im Unternehmensgegenstand |
+| Spezifische Tätigkeit (CNC, Spritzguss, Kältetechnik) | B (query + purpose) | Branche im Namen + Tätigkeit im Gegenstand |
+
+### Filter-Sicherheitsranking
+
+✅ SICHERE Filter (verwende großzügig):
+- status: "active" — IMMER setzen, filtert 48% aufgelöste Firmen
+- legal_form: "gmbh", "ag", "kg", etc. — sanfte Einschränkung (behält ~77%)
+- incorporated_at: {"max": "2000-01-01"} — gut für "etabliert" (behält ~51%)
+- location: {"latitude": ..., "longitude": ..., "radius": ...} — proportionale Einschränkung
+
+⚠️ MODERATE Filter (nur wenn Kunde explizit danach fragt):
+- has_representative_owner: "true" — inhabergeführt (behält ~39%)
+- youngest_owner_age: {"min": "60"} — GF über 60 (behält nur ~14%)
+- is_family_owned: "true" — Familienunternehmen (behält nur ~11%)
+- has_sole_owner: "true" — Alleingesellschafter
+
+❌ NIEMALS als Filter verwenden (Daten zu lückenhaft, zerstört Ergebnisse):
+- employees — NUR 2% ABDECKUNG! "50-500 Mitarbeiter" → 98% der Firmen fallen weg
+- industry_codes — Unzuverlässige WZ-Code-Zuordnung, viele Firmen ohne Codes
+- revenue, balance_sheet_total, capital_amount — kaum Daten vorhanden
+Wenn der Kunde Mitarbeiter-/Umsatz-/Finanzkriterien nennt, schreibe sie in "notes" aber NIEMALS in filters.
+
+### purpose keywords — Syntax
+
+RICHTIG: {"field": "purpose", "keywords": ["Keyword1", "Keyword2"]}
+- "keywords" nutzt OR-Logik: mehr Keywords = MEHR Ergebnisse (nicht weniger!)
+- Verwende 3-5 deutsche Synonyme für beste Abdeckung (3 Keywords = +50%, 6 Keywords = +160% vs. 1 Keyword)
+- FALSCH: {"field": "purpose", "value": "..."} — das macht exakten Match und liefert fast nichts!
+
+### WICHTIG: location ist KEIN Filter!
+Location gehört NICHT in das filters-Array! Location ist ein separates Top-Level-Feld:
+- RICHTIG: "location": {"latitude": 48.8, "longitude": 11.5, "radius": 150.0}
+- FALSCH: "filters": [{"field": "location", ...}] ← DAS FUNKTIONIERT NICHT!
+
+### KRITISCH: Deutsche Komposita IMMER aufspalten!
+
+Deutsche Komposita (zusammengesetzte Wörter) funktionieren SCHLECHT als einzelnes Keyword.
+IMMER in Bestandteile aufspalten UND Synonyme hinzufügen:
+
+- "Werkzeugmaschine" → ["Werkzeug", "Maschine", "Werkzeugbau"] (1 vs. 1.451 Ergebnisse!)
+- "Kunststoffverarbeitung" → ["Kunststoff", "Spritzguss", "Extrusion", "Kunststoffverarbeitung"]
+- "Lebensmittelherstellung" → ["Lebensmittel", "Nahrungsmittel", "Herstellung"]
+- "Softwareentwicklung" → ["Software", "Softwareentwicklung", "Programmierung", "IT-Dienstleistung"]
+- "Metallverarbeitung" → ["Metall", "Metallverarbeitung", "Metallbau", "Stahlbau"]
+
+Generelle Regel: Kompositum beibehalten + Bestandteile + 2-3 Synonyme = optimale Abdeckung
+
+### WICHTIGE Regeln
+1. Maximal 3 Filter gleichzeitig (jeder Filter halbiert die Ergebnisse grob)
+2. NIEMALS industry_codes verwenden — WZ-Codes sind unzuverlässig zugeordnet
+3. NIEMALS employees als Filter — nur 2% der Firmen haben diese Daten
+4. NIEMALS query UND purpose keywords für DENSELBEN Begriff — das doppelt-filtert und killt Ergebnisse
+5. Bei Strategie C (purpose keywords ohne query): es kommen trotzdem sinnvolle Ergebnisse, kein query nötig
 
 ## Rechtsform-Mapping
 - "GmbH" → "gmbh"
@@ -110,11 +178,13 @@ NUR wenn:
 NICHT rückfragen bei:
 - Fehlender Region (→ bundesweit suchen)
 - Fehlender Rechtsform (→ weglassen)
-- Fehlender Umsatz (→ weglassen)
+- Fehlender Umsatz (→ weglassen, in notes schreiben)
+- Fehlender Mitarbeiterzahl (→ weglassen, in notes schreiben)
 
 ## Default-Verhalten
 - Immer status: "active" setzen
 - Wenn keine spezifischen Datenpunkte genannt → alle Basis-Daten liefern
+- Im Zweifel WENIGER Filter → mehr Ergebnisse → Kunde kann verfeinern
 """
 
 USER_PROMPT_TEMPLATE = """Analysiere diese E-Mail und extrahiere die Suchparameter:
@@ -138,11 +208,6 @@ async def parse_briefing(
     Returns a dict with: service_type, query, filters, location,
     company_list, notes, needs_clarification, clarification_question
     """
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
-
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-
     user_msg = USER_PROMPT_TEMPLATE.format(
         sender=sender,
         subject=subject,
@@ -151,14 +216,11 @@ async def parse_briefing(
 
     logger.info("Parsing briefing from %s: %s", sender, subject)
 
-    response = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
+    raw_text = await create_message(
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
+        user_msg=user_msg,
+        max_tokens=2000,
     )
-
-    raw_text = response.content[0].text.strip()
 
     # Strip markdown code fences if present
     if raw_text.startswith("```"):
@@ -174,6 +236,7 @@ async def parse_briefing(
 
     # Ensure defaults
     parsed.setdefault("service_type", "longlist")
+    parsed.setdefault("confidence", 0.5)
     parsed.setdefault("target_company_url", None)
     parsed.setdefault("target_company_name", None)
     parsed.setdefault("desired_count", None)
@@ -185,13 +248,22 @@ async def parse_briefing(
     parsed.setdefault("needs_clarification", False)
     parsed.setdefault("clarification_question", None)
 
+    # Force longlist — only service currently active
+    parsed["service_type"] = "longlist"
+
+    # Ensure confidence is a float
+    try:
+        parsed["confidence"] = float(parsed["confidence"])
+    except (TypeError, ValueError):
+        parsed["confidence"] = 0.5
+
     # Always ensure status: active filter is present
     has_status = any(f.get("field") == "status" for f in parsed["filters"])
     if not has_status:
         parsed["filters"].insert(0, {"field": "status", "value": "active"})
 
-    logger.info("Parsed briefing: service=%s, query=%s, %d filters",
-                parsed["service_type"], parsed["query"], len(parsed["filters"]))
+    logger.info("Parsed briefing: service=%s, confidence=%.2f, query=%s, %d filters",
+                parsed["service_type"], parsed["confidence"], parsed["query"], len(parsed["filters"]))
 
     return parsed
 
@@ -205,22 +277,22 @@ Originale Suchparameter:
 - Kundenwunsch: {notes}
 
 Strategien (wähle die 2-3 passendsten):
-1. Region erweitern (größerer Radius oder ganz weglassen)
-2. Branchencode ändern oder ergänzen (verwandte WZ-Codes)
-3. Suchbegriff variieren (Synonyme, verwandte Begriffe)
-4. Restriktive Filter lockern (employees, legal_form etc. weglassen)
-5. Filter-Kombination vereinfachen (weniger Filter = mehr Treffer)
+1. Suchbegriff variieren (Synonyme, verwandte Begriffe, kürzere Terme)
+2. Region erweitern (größerer Radius oder ganz weglassen)
+3. Restriktive Filter entfernen (employees, is_family_owned, youngest_owner_age etc.)
+4. Filter-Kombination vereinfachen (weniger Filter = mehr Treffer)
 
 WICHTIG:
+- Der query-Term ist der WICHTIGSTE Parameter — er sucht im Firmennamen
 - Jede Alternative MUSS sich deutlich von der Original-Suche unterscheiden
 - Jede Alternative braucht einen kurzen deutschen "title" (max 40 Zeichen) für den Button-Text
 - Verwende dasselbe JSON-Schema wie die Original-Suche
 - Immer status: "active" als Filter beibehalten
-- KEINE Finanz-Filter (revenue, balance_sheet_total) — die funktionieren nie
+- NIEMALS diese Filter verwenden: employees, industry_codes, revenue, balance_sheet_total, capital_amount
 - ALLE Filter-Werte MÜSSEN Strings sein (z.B. "50" nicht 50, "true" nicht true)
 - Mindestens eine Alternative MUSS location auf null setzen (bundesweite Suche)
 - Mindestens eine Alternative MUSS den query-Term durch ein Synonym/verwandten Begriff ersetzen
-- Halte Filter minimal — je weniger Filter, desto mehr Treffer
+- Halte Filter minimal — max 2-3 Filter, je weniger desto mehr Treffer
 
 Antworte NUR mit einem JSON-Array:
 ```json
@@ -238,11 +310,6 @@ async def suggest_search_alternatives(
     notes: str,
 ) -> list[dict[str, Any]]:
     """Generate 2-3 alternative search parameter sets when original search returned 0 results."""
-    if not ANTHROPIC_API_KEY:
-        return []
-
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-
     user_msg = _ALTERNATIVES_PROMPT.format(
         query=query,
         filters=json.dumps(filters, ensure_ascii=False),
@@ -251,14 +318,11 @@ async def suggest_search_alternatives(
     )
 
     try:
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2000,
+        raw_text = await create_message(
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
+            user_msg=user_msg,
+            max_tokens=2000,
         )
-
-        raw_text = response.content[0].text.strip()
         if raw_text.startswith("```"):
             lines = raw_text.split("\n")
             lines = [l for l in lines if not l.startswith("```")]

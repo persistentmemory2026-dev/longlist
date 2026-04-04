@@ -249,27 +249,154 @@ Zusätzliche Kategorien (real-time abrufbar):
 
 Strukturierte Jahresabschlüsse aus dem Bundesanzeiger.
 
-### Search Endpoint (`/v1/search`)
-**Credits:** 10 | **Wrapper:** `preview_search.run_preview_search()`
+### Search Endpoint (`/v1/search/company`)
+**Credits:** 10 pro Query (nicht pro Ergebnis) | **Wrapper:** `preview_search.run_preview_search()`
 
-Filter-Felder (alle Werte MÜSSEN Strings sein):
-| Feld | Werte | Beschreibung |
-|------|-------|-------------|
-| `status` | `"active"` | Immer setzen |
-| `legal_form` | `"gmbh"`, `"ag"`, `"kg"`, etc. | Rechtsform |
-| `employees` | `{"min": "50", "max": "500"}` | Mitarbeiterzahl |
-| `industry_codes` | `{"value": "62"}` | WZ-Code (2-stellig) |
-| `incorporated_at` | `{"max": "2000-01-01"}` | Gründung vor Datum |
-| `youngest_owner_age` | `{"min": "60"}` | GF-Alter |
-| `has_sole_owner` | `"true"` / `"false"` | Alleingesellschafter |
-| `has_representative_owner` | `"true"` | Inhabergeführt |
-| `is_family_owned` | `"true"` | Familienunternehmen |
-| `city` / `zip` | `{"value": "München"}` | Ort/PLZ |
-| `purpose` | `{"value": ["keyword"]}` | Gegenstand |
+**Verifiziert am 2026-04-04 mit Live-API-Tests (33 Queries, 330 Credits).**
 
-**⚠️ NICHT als Filter verwenden** (Daten zu lückenhaft → 0 Treffer):
-- `revenue`, `balance_sheet_total`, `capital_amount`
-- Stattdessen in `notes` erwähnen
+#### Suchparameter
+
+| Parameter | Typ | Beschreibung |
+|-----------|-----|-------------|
+| `query` | `{"value": "Suchbegriff"}` | **Wichtigstes Werkzeug.** Sucht primär im Firmennamen. Breit und zuverlässig. |
+| `filters` | `[{...}, ...]` | Optionale Einschränkungen (siehe unten) |
+| `location` | `{"latitude": float, "longitude": float, "radius": float}` | Geo-Filter (Radius in km) |
+| `pagination` | `{"page": int, "per_page": int}` | Seitensteuerung |
+
+#### `query` — Verhalten (verifiziert)
+
+- Sucht primär im **Firmennamen** (nicht im Unternehmensgegenstand)
+- "Maschinenbau" → 4.998 | "Software" → 10.178 | "Immobilien" → 98.861
+- Exakte Namen funktionieren: "Descartes Technologies" → 1
+- Lange Phrasen funktionieren eingeschränkt: "Herstellung von Werkzeugmaschinen" → 449
+- `query` allein (ohne Filter) liefert die **breiteste Ergebnismenge**
+
+#### Filter — Sicherheitsranking (verifiziert)
+
+Getestet mit Basis query="Maschinenbau" (4.998 Ergebnisse ohne Filter):
+
+| Sicherheit | Filter | Ergebnisse | Behält | Hinweise |
+|------------|--------|-----------|--------|----------|
+| ✅ Sicher | `status=active` | 2.624 | 52% | **Immer setzen** — filtert aufgelöste Firmen |
+| ✅ Sicher | `legal_form=gmbh` | 3.826 | 77% | Sanfte Einschränkung |
+| ✅ Sicher | `incorporated_at max=2000-01-01` | 2.560 | 51% | Gut für "etabliert" |
+| ⚠️ Moderat | `has_representative_owner=true` | 1.934 | 39% | Inhabergeführt — brauchbar |
+| ⚠️ Moderat | `location` (Bayern, r=150km) | 846 | 17% | Proportional, nicht tödlich |
+| 🔴 Aggressiv | `youngest_owner_age min=60` | 688 | 14% | Geringe Datenabdeckung |
+| 🔴 Aggressiv | `is_family_owned=true` | 557 | 11% | Geringe Datenabdeckung |
+| 🔴 Aggressiv | `legal_form=ag` | 28 | 0,6% | Sehr wenige AGs |
+| ❌ Gefährlich | `employees min=50 max=500` | 107 | **2%** | Kaum Firmen haben Mitarbeiterdaten! |
+| ❌ Gefährlich | `industry_codes` | variabel | variabel | Siehe eigener Abschnitt unten |
+
+#### Filter-Kombinationen — Multiplikativer Effekt (verifiziert)
+
+| Kombination | Ergebnisse | % von Basis |
+|-------------|-----------|-------------|
+| active + gmbh | 1.999 | 40% |
+| active + gmbh + inhabergeführt | 1.262 | 25% |
+| active + gmbh + inhabergeführt + owner>60 | 294 | 6% |
+| active + gmbh + employees 50-500 | 84 | **1,7%** |
+| Maschinenbau + Bayern + gmbh + active | 406 | 8% |
+
+**⚠️ Jeder zusätzliche Filter halbiert die Ergebnisse grob. Max. 3 Filter empfohlen.**
+
+#### `purpose` Filter — Zwei Varianten (verifiziert)
+
+| Variante | Syntax | Ergebnisse | Beschreibung |
+|----------|--------|-----------|-------------|
+| `value` (exact) | `{"field": "purpose", "value": "Maschinenbau"}` | 45 | **Quasi unbrauchbar** — exakter Match |
+| `keywords` (search) | `{"field": "purpose", "keywords": ["Maschinenbau"]}` | 4.175 | **Brauchbar** — Keyword-Suche im Unternehmensgegenstand |
+
+**⚠️ NIEMALS `query` + `purpose keywords` zum gleichen Thema kombinieren!**
+"query=Maschinenbau + purpose keywords=[Werkzeug]" → 38 Ergebnisse (Doppelfilterung).
+Entweder `query` ODER `purpose keywords` nutzen, nicht beides für verwandte Begriffe.
+
+#### `industry_codes` — ⚠️ Unzuverlässig (verifiziert)
+
+| Code-Format | Beispiel | Ergebnis | Bewertung |
+|-------------|----------|----------|-----------|
+| 2-stellig | `"28"` | 0 | **Funktioniert nicht** |
+| 2-stellig | `"62"` | 8 | Praktisch nutzlos |
+| 4-stellig | `"28.41"` | 2.313 | Funktioniert für Industrie |
+| 4-stellig | `"62.01"` | 1 | Kaum Abdeckung bei IT/Dienstleistung |
+| + query | `query + WZ` | 0 | **Kombination killt alles** |
+
+**Zusätzliches Problem:** Viele Firmen haben KEINE WZ-Codes zugewiesen.
+Test: 5 Schreinereien abgefragt → alle 5 ohne WZ-Codes.
+OpenRegister nutzt WZ 2025 (nicht WZ 2008), Claude kennt diese Codes nicht zuverlässig.
+
+**Empfehlung: `industry_codes` NICHT als Filter verwenden.**
+
+#### `location` — Verhalten (verifiziert)
+
+| Radius | Ergebnisse | % von Basis |
+|--------|-----------|-------------|
+| Bayern (r=150km) | 846 | 17% |
+| München 50km | 137 | 3% |
+| München 20km | 52 | 1% |
+
+Proportionale Einschränkung, kein Cliff-Effekt. Sicher zu verwenden.
+
+#### Edge Cases (verifiziert)
+
+| Test | Ergebnis | Hinweis |
+|------|----------|---------|
+| Kein query, nur status=active | 2.464.735 | Alle aktiven Firmen in DE |
+| Leerer query + gmbh | 2.626.925 | Filter allein = riesige Ergebnismengen |
+| Code als query ("28.41") | 3 | Query sucht im Namen, nicht in Codes |
+
+#### Deutsche Komposita in purpose keywords (verifiziert)
+
+**KRITISCH:** Zusammengesetzte deutsche Wörter funktionieren schlecht als einzelnes Keyword.
+
+| Keyword | Ergebnisse | Besser |
+|---------|-----------|--------|
+| `["Werkzeugmaschine"]` | **1** | `["Werkzeug", "Maschine", "Werkzeugbau"]` → 1.451 |
+| `["Kunststoffverarbeitung"]` | 673 | `["Kunststoff", "Spritzguss", "Extrusion"]` → 3.857 |
+
+**Regel:** Komposita immer aufspalten + Synonyme hinzufügen. Mehr keywords = mehr Ergebnisse (OR-Logik).
+
+| Keyword-Anzahl | Ergebnisse | Steigerung |
+|----------------|-----------|------------|
+| 1 Keyword | 6.214 | Basis |
+| 3 Keywords | 9.327 | +50% |
+| 6 Keywords | 16.200 | +161% |
+
+#### Empfohlene Suchstrategien (verifiziert)
+
+**Strategie A — Breit (Industrie/Handwerk):**
+```
+query = Branchenbegriff (sucht im Firmennamen)
+filters = status:active + legal_form + location
+→ Maschinenbau + GmbH + Süddeutschland + inhabergeführt = 540 Ergebnisse
+```
+
+**Strategie B — Präzision (spezifische Tätigkeit):**
+```
+query = Branche (Name) + purpose keywords = spezifische Tätigkeit
+filters = status:active
+→ Maschinenbau + purpose:[CNC, Drehen, Fräsen] = 33 Ergebnisse (SEHR präzise)
+```
+
+**Strategie C — Maximale Abdeckung (Dienstleistungen/IT):**
+```
+purpose keywords = [Term + Synonyme] (OHNE query)
+filters = status:active + legal_form + location
+→ purpose:[IT-Dienstleistung, Softwareentwicklung, IT-Beratung] = 12.061 Ergebnisse
+```
+
+#### Autocomplete Endpoint (`/v1/search/autocomplete`)
+**Credits:** Unbekannt (möglicherweise kostenlos) | Nicht im Wrapper
+
+- Gibt bis zu 10 Firmennamen-Matches zurück
+- Nur Namenssuche, keine Filter/Location
+- Potenzial: Schnelle Vorschau oder Firmenname-Validierung
+
+**⚠️ NICHT als Filter verwenden** (Daten zu lückenhaft → 0 oder irreführende Treffer):
+- `revenue`, `balance_sheet_total`, `capital_amount` — Finanzfilter
+- `employees` — nur 2% Abdeckung
+- `industry_codes` — unzuverlässige Code-Zuordnung, WZ 2025 unbekannt
+- Stattdessen in `notes` erwähnen für manuelle Nachprüfung
 
 ---
 

@@ -14,17 +14,22 @@ import job_store
 from admin_auth import require_admin
 from agentmail_client import reply_to_thread
 from agentmail_inbound import (
+    extract_attachments,
     extract_inbound_email_fields,
     verify_and_parse_agentmail_body,
 )
+from attachment_parser import download_attachment, parse_company_list_from_file
 from briefing_parser import parse_briefing, suggest_search_alternatives
 from buyer_groups import define_buyer_groups, parse_buyer_selection
+from buyer_group_optimizer import validate_buyer_groups
 from config import APP_URL
 from email_html import (
     build_checkout_cta_plaintext,
     build_delivery_email_html,
     build_no_results_email_html,
     build_preview_email_html,
+    build_service_menu_email_html,
+    build_service_menu_plaintext,
 )
 from email_writer import write_delivery_email, write_no_results_email, write_preview_email
 from pipeline import run_pipeline
@@ -142,12 +147,21 @@ async def abgebrochen_page():
 
 
 # ---------------------------------------------------------------------------
-# Document proxy — serves fresh signed URLs for OpenRegister documents
+# Document proxy — R2 cache first, OpenRegister fallback (with lazy caching)
 # ---------------------------------------------------------------------------
 @app.get("/doc/{document_id}")
 async def proxy_document(document_id: str):
-    """Fetch a fresh signed S3 URL from OpenRegister and redirect to it."""
+    """Serve document from R2 cache, or fetch from OpenRegister and cache for next time."""
     from fastapi.responses import RedirectResponse
+    from r2_client import get_document_url, document_exists, upload_document
+
+    # 1. Try R2 cache first
+    if document_exists(document_id):
+        r2_url = get_document_url(document_id, expires_in=3600)
+        if r2_url:
+            return RedirectResponse(url=r2_url)
+
+    # 2. Fallback: fetch from OpenRegister
     from openregister import Openregister
     from config import OPENREGISTER_API_KEY
 
@@ -158,6 +172,17 @@ async def proxy_document(document_id: str):
         doc = client.document.get_cached_v1(document_id=document_id)
         if not doc.url:
             return JSONResponse({"error": "Document URL not available"}, status_code=404)
+
+        # 3. Lazy cache: download and store in R2 for next time
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=30) as http:
+                resp = await http.get(doc.url)
+                if resp.status_code == 200:
+                    upload_document(document_id, resp.content)
+        except Exception as cache_err:
+            logger.warning("Lazy R2 cache failed for %s: %s", document_id, cache_err)
+
         return RedirectResponse(url=doc.url)
     except Exception as e:
         logger.error("Document proxy failed for %s: %s", document_id, e)
@@ -226,6 +251,202 @@ async def retry_search(job_id: str, variant_key: str, background_tasks: Backgrou
 </div></body></html>""",
         status_code=200,
     )
+
+
+# ---------------------------------------------------------------------------
+# Service selection — customer clicks service button from Smart Service Menu
+# ---------------------------------------------------------------------------
+# Only longlist is active — other services disabled while we focus on search quality
+_VALID_SERVICE_TYPES = {"longlist"}
+_DISABLED_SERVICE_TYPES = {"enrichment", "sell_side", "file_enrichment"}  # kept for reference
+
+CONFIDENCE_THRESHOLD = 0.95
+
+
+@app.get("/select/{job_id}/{service_type}")
+async def select_service(job_id: str, service_type: str, background_tasks: BackgroundTasks):
+    """
+    Customer clicked a service button from the Smart Service Menu.
+    Routes to the appropriate processing flow.
+    """
+    job = job_store.get_job(job_id)
+    if not job:
+        return HTMLResponse(
+            f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nicht gefunden — Longlist</title><style>{_BRAND_PAGE_STYLE}</style></head>
+<body><div class="card">
+  <div class="logo"><strong>Long</strong><span>list</span></div>
+  <div class="icon">&#10060;</div>
+  <h1>Auftrag nicht gefunden</h1>
+  <p>Dieser Link ist ungültig oder abgelaufen.</p>
+  <div class="footer">
+    <a href="https://longlist.email">longlist.email</a> &middot;
+    <a href="https://longlist.email/impressum">Impressum</a> &middot;
+    <a href="https://longlist.email/datenschutz">Datenschutz</a>
+  </div>
+</div></body></html>""",
+            status_code=404,
+        )
+
+    if service_type not in _VALID_SERVICE_TYPES:
+        return HTMLResponse(
+            f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ungültiger Service — Longlist</title><style>{_BRAND_PAGE_STYLE}</style></head>
+<body><div class="card">
+  <div class="logo"><strong>Long</strong><span>list</span></div>
+  <div class="icon">&#10060;</div>
+  <h1>Ungültiger Service</h1>
+  <p>Der gewählte Service ist nicht verfügbar.</p>
+  <div class="footer">
+    <a href="https://longlist.email">longlist.email</a> &middot;
+    <a href="https://longlist.email/impressum">Impressum</a> &middot;
+    <a href="https://longlist.email/datenschutz">Datenschutz</a>
+  </div>
+</div></body></html>""",
+            status_code=400,
+        )
+
+    # Idempotency: if already processing, just show confirmation
+    current_status = job.get("status", "")
+    if current_status not in ("awaiting_service_selection", "parsed"):
+        return HTMLResponse(
+            f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bereits bearbeitet — Longlist</title><style>{_BRAND_PAGE_STYLE}</style></head>
+<body><div class="card">
+  <div class="logo"><strong>Long</strong><span>list</span></div>
+  <div class="icon">&#10003;</div>
+  <h1>Auftrag wird bearbeitet</h1>
+  <p>Ihr Auftrag wird bereits bearbeitet. Sie erhalten die Ergebnisse in Kürze per E-Mail.</p>
+  <div class="footer">
+    <a href="https://longlist.email">longlist.email</a> &middot;
+    <a href="https://longlist.email/impressum">Impressum</a> &middot;
+    <a href="https://longlist.email/datenschutz">Datenschutz</a>
+  </div>
+</div></body></html>""",
+            status_code=200,
+        )
+
+    # Store effective service_type (enrichment for file_enrichment) but pass original for attachment handling
+    effective_service_type = "enrichment" if service_type == "file_enrichment" else service_type
+
+    job_store.merge_job(job_id, {
+        "status": "service_selected",
+        "service_type": effective_service_type,
+    })
+
+    sender = job.get("sender", "")
+    thread_id = job.get("thread_id", "")
+
+    background_tasks.add_task(
+        process_incoming_email_with_service, job_id, sender, thread_id, effective_service_type,
+        service_type == "file_enrichment",
+    )
+
+    # Service labels for confirmation page
+    service_labels = {
+        "enrichment": "Datenanreicherung",
+        "sell_side": "Käufersuche",
+        "longlist": "Longlist-Recherche",
+        "file_enrichment": "Firmenliste anreichern",
+    }
+    label = service_labels.get(service_type, service_type)
+
+    return HTMLResponse(
+        f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Service gewählt — Longlist</title><style>{_BRAND_PAGE_STYLE}</style></head>
+<body><div class="card">
+  <div class="logo"><strong>Long</strong><span>list</span></div>
+  <div class="icon">&#128640;</div>
+  <h1>{label} gestartet</h1>
+  <p>Wir bearbeiten Ihre Anfrage und senden Ihnen die Ergebnisse in Kürze per E-Mail.</p>
+  <div class="footer">
+    <a href="https://longlist.email">longlist.email</a> &middot;
+    <a href="https://longlist.email/impressum">Impressum</a> &middot;
+    <a href="https://longlist.email/datenschutz">Datenschutz</a>
+  </div>
+</div></body></html>""",
+        status_code=200,
+    )
+
+
+async def process_incoming_email_with_service(
+    job_id: str,
+    sender: str,
+    thread_id: str,
+    service_type: str,
+    from_file_upload: bool = False,
+):
+    """Process an email after the user selected a service from the menu."""
+    try:
+        job = job_store.get_job(job_id) or {}
+        parsed = job.get("parsed", {})
+        subject = job.get("subject", "")
+        extra = job.get("extra", {})
+
+        # File enrichment: download attachment and extract company names
+        if from_file_upload:
+            att_list = extra.get("attachments", [])
+            msg_id = extra.get("message_id", "") or job.get("message_id", "")
+
+            if att_list and msg_id:
+                att = att_list[0]  # Use first spreadsheet attachment
+                logger.info("Job %s: Downloading attachment %s (%s)",
+                            job_id, att["filename"], att["attachment_id"])
+                try:
+                    file_data = await download_attachment(
+                        attachment_id=att["attachment_id"],
+                        message_id=msg_id,
+                    )
+                    companies = parse_company_list_from_file(file_data, att["filename"])
+                    if companies:
+                        parsed["company_list"] = companies
+                        parsed["service_type"] = "enrichment"
+                        logger.info("Job %s: Extracted %d companies from %s",
+                                    job_id, len(companies), att["filename"])
+                    else:
+                        logger.warning("Job %s: No companies found in %s", job_id, att["filename"])
+                        if thread_id:
+                            await reply_to_thread(
+                                thread_id=thread_id,
+                                to_email=sender,
+                                body_html="<p>Wir konnten keine Firmennamen in Ihrer Datei erkennen. "
+                                          "Bitte senden Sie eine Excel- oder CSV-Datei mit einer Spalte "
+                                          "\"Firma\" oder \"Name\".</p>",
+                                body_text="Wir konnten keine Firmennamen in Ihrer Datei erkennen.",
+                            )
+                        job_store.merge_job(job_id, {"status": "awaiting_clarification"})
+                        return
+                except Exception as e:
+                    logger.error("Job %s: Failed to process attachment: %s", job_id, e)
+                    if thread_id:
+                        await reply_to_thread(
+                            thread_id=thread_id,
+                            to_email=sender,
+                            body_html="<p>Leider konnten wir Ihre Datei nicht verarbeiten. "
+                                      "Bitte prüfen Sie das Format (Excel .xlsx oder CSV) "
+                                      "und versuchen Sie es erneut.</p>",
+                            body_text="Leider konnten wir Ihre Datei nicht verarbeiten.",
+                        )
+                    job_store.merge_job(job_id, {"status": "error", "error": f"Attachment parse failed: {e}"})
+                    return
+            else:
+                logger.warning("Job %s: file_enrichment selected but no attachment metadata found", job_id)
+
+        # Override service_type with user's selection
+        parsed["service_type"] = service_type
+        job_store.merge_job(job_id, {"parsed": parsed, "service_type": service_type})
+
+        # Route to the existing processing logic (reuse process_incoming_email internals)
+        await _run_service_flow(job_id, sender, subject, parsed, thread_id, service_type)
+
+    except Exception as e:
+        logger.exception("Error processing service selection for job %s: %s", job_id, e)
+        job_store.merge_job(job_id, {"status": "error", "error": str(e)})
+        await notify_error(job_id, str(e))
 
 
 async def process_retry_search(
@@ -385,6 +606,25 @@ async def process_sell_side_selection(
 
 
 # ---------------------------------------------------------------------------
+# Service reply parser — keywords in email text → service type
+# ---------------------------------------------------------------------------
+def _parse_service_from_reply(body: str) -> str | None:
+    """Parse a service type from a free-text email reply."""
+    text = body.lower().strip()
+    # Check keywords in priority order
+    _keyword_map = [
+        (["datenanreicherung", "enrichment", "daten anreichern"], "enrichment"),
+        (["käufer", "sell-side", "sell side", "buyer", "käufersuche"], "sell_side"),
+        (["longlist", "recherche", "suche", "kriterien"], "longlist"),
+        (["liste", "upload", "datei", "excel", "csv", "firmenliste"], "file_enrichment"),
+    ]
+    for keywords, service in _keyword_map:
+        if any(kw in text for kw in keywords):
+            return service
+    return None
+
+
+# ---------------------------------------------------------------------------
 # 1. AgentMail Webhook — incoming email
 # ---------------------------------------------------------------------------
 @app.post("/webhook/agentmail")
@@ -404,19 +644,44 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
         return {"status": "ignored", "reason": payload.get("event_type")}
 
     sender, subject, body, thread_id, message_id = extract_inbound_email_fields(payload)
+    attachments = extract_attachments(payload)
 
-    logger.info("Incoming email from %s: %s (message_id=%s)", sender, subject, message_id)
+    logger.info("Incoming email from %s: %s (message_id=%s, %d attachments)",
+                sender, subject, message_id, len(attachments))
 
-    # Check if this is a reply to a sell_side job awaiting buyer group selection
+    # Check if this is a reply to an existing thread
     if thread_id:
         existing_job = job_store.find_job_by_thread(thread_id)
-        if existing_job and existing_job.get("status") == "awaiting_selection":
+        if existing_job:
             existing_jid = existing_job.get("job_id", "")
-            logger.info("Sell-side selection reply detected for job %s", existing_jid)
-            background_tasks.add_task(
-                process_sell_side_selection, existing_jid, sender, body, thread_id,
-            )
-            return {"status": "accepted", "job_id": existing_jid, "type": "sell_side_selection"}
+            existing_status = existing_job.get("status", "")
+
+            # Reply to service menu — parse text as service selection
+            if existing_status == "awaiting_service_selection":
+                logger.info("Service menu reply detected for job %s", existing_jid)
+                selected = _parse_service_from_reply(body)
+                if selected:
+                    effective = "enrichment" if selected == "file_enrichment" else selected
+                    job_store.merge_job(existing_jid, {
+                        "status": "service_selected",
+                        "service_type": effective,
+                    })
+                    sender_job = existing_job.get("sender", sender)
+                    background_tasks.add_task(
+                        process_incoming_email_with_service,
+                        existing_jid, sender_job, thread_id, effective,
+                    )
+                    return {"status": "accepted", "job_id": existing_jid, "type": "service_selection"}
+                # No match → re-send menu (fall through to new job creation)
+                logger.info("Job %s: Could not parse service from reply, creating new job", existing_jid)
+
+            # Reply to sell-side buyer group selection
+            elif existing_status == "awaiting_selection":
+                logger.info("Sell-side selection reply detected for job %s", existing_jid)
+                background_tasks.add_task(
+                    process_sell_side_selection, existing_jid, sender, body, thread_id,
+                )
+                return {"status": "accepted", "job_id": existing_jid, "type": "sell_side_selection"}
 
     job_id = str(uuid.uuid4())[:8]
     job_store.put_job(
@@ -430,7 +695,7 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
         },
     )
 
-    background_tasks.add_task(process_incoming_email, job_id, sender, subject, body, thread_id)
+    background_tasks.add_task(process_incoming_email, job_id, sender, subject, body, thread_id, attachments, message_id)
 
     return {"status": "accepted", "job_id": job_id}
 
@@ -441,8 +706,10 @@ async def process_incoming_email(
     subject: str,
     body: str,
     thread_id: str,
+    attachments: list[dict[str, Any]] | None = None,
+    message_id: str = "",
 ):
-    """Background task: parse briefing, run preview, send offer email."""
+    """Background task: parse briefing, check confidence, route to service or show menu."""
     try:
         parsed = await parse_briefing(sender=sender, subject=subject, body=body)
         job_store.merge_job(
@@ -450,6 +717,7 @@ async def process_incoming_email(
             {"parsed": parsed, "status": "parsed", "service_type": parsed.get("service_type")},
         )
 
+        # Precedence: needs_clarification always takes priority
         if parsed.get("needs_clarification"):
             question = parsed.get(
                 "clarification_question",
@@ -466,219 +734,217 @@ async def process_incoming_email(
             return
 
         service_type = parsed["service_type"]
+        confidence = parsed.get("confidence", 0.5)
 
-        total_companies = 0
-        preview_names: list[str] = []
-
-        if service_type == "longlist":
-            preview = run_preview_search(
-                query=parsed.get("query", ""),
-                filters=parsed.get("filters"),
-                location=parsed.get("location"),
-                per_page=5,
-            )
-            total_companies = preview["total"]
-            preview_names = [c["name"] for c in preview["preview_companies"]]
-            job_store.merge_job(job_id, {"preview": preview})
-
-        elif service_type == "enrichment":
-            company_list = parsed.get("company_list", [])
-            total_companies = len(company_list) if company_list else 0
-            preview_names = (company_list or [])[:5]
-
-        elif service_type == "sell_side":
-            # Sell-Side: Analyze target → define buyer groups → count per group
-            target_url = parsed.get("target_company_url")
-            target_name = parsed.get("target_company_name")
-
-            job_store.merge_job(job_id, {"status": "analyzing"})
-            target_analysis = await analyze_target_company(url=target_url, name=target_name)
-
-            buyer_groups = await define_buyer_groups(target_analysis)
-
-            if not buyer_groups:
-                job_store.merge_job(job_id, {"status": "error", "error": "Failed to define buyer groups"})
-                logger.error("Job %s: No buyer groups generated", job_id)
-                await notify_error(job_id, "Buyer group definition failed — Claude returned empty result")
-                return
-
-            # Count available per group
-            for group in buyer_groups:
-                sanitized_filters = []
-                for f in (group.get("filters") or []):
-                    sf = dict(f)
-                    for k, v in sf.items():
-                        if isinstance(v, (int, float, bool)):
-                            sf[k] = str(v)
-                    sanitized_filters.append(sf)
-                try:
-                    preview = run_preview_search(
-                        query=group.get("query", ""),
-                        filters=sanitized_filters,
-                        location=group.get("location"),
-                        per_page=3,
-                    )
-                    group["available"] = preview["total"]
-                    group["preview_names"] = [c["name"] for c in preview["preview_companies"][:3]]
-                except Exception as e:
-                    logger.warning("Buyer group search failed for '%s': %s", group.get("name"), e)
-                    group["available"] = 0
-                    group["preview_names"] = []
-
-            total_available = sum(g["available"] for g in buyer_groups)
-
-            # Save and send buyer groups email (NO Stripe links)
-            job_store.merge_job(job_id, {
-                "status": "awaiting_selection",
-                "service_type": "sell_side",
-                "total_companies": total_available,
-                "extra": {
-                    "target_analysis": target_analysis,
-                    "buyer_groups": buyer_groups,
-                },
-            })
-
-            groups_body = await write_buyer_groups_email(target_analysis, buyer_groups)
-            groups_html = build_buyer_groups_email_html(groups_body, buyer_groups)
-
-            if thread_id:
-                await reply_to_thread(
-                    thread_id=thread_id,
-                    to_email=sender,
-                    body_html=groups_html,
-                    body_text=groups_body,
-                )
-
-            logger.info(
-                "Job %s: Sell-side analysis complete, %d available across %d groups, sent to %s",
-                job_id, total_available, len(buyer_groups), sender,
-            )
-            return
-
-        job_store.merge_job(
-            job_id,
-            {"total_companies": total_companies, "status": "preview_done"},
-        )
-
-        # No results → test alternatives, send follow-up with retry buttons
-        if total_companies == 0 and service_type == "longlist":
-            # 1. Generate and test alternative search parameters
-            alternatives = await suggest_search_alternatives(
-                query=parsed.get("query", ""),
-                filters=parsed.get("filters", []),
-                location=parsed.get("location"),
-                notes=parsed.get("notes", ""),
-            )
-
-            tested: list[dict[str, Any]] = []
-            for alt in alternatives[:3]:
-                try:
-                    # Ensure all filter values are strings (OpenRegister API requirement)
-                    sanitized_filters = []
-                    for f in (alt.get("filters") or []):
-                        sf = dict(f)
-                        for k, v in sf.items():
-                            if isinstance(v, (int, float, bool)):
-                                sf[k] = str(v)
-                        sanitized_filters.append(sf)
-
-                    result = run_preview_search(
-                        query=alt.get("query", ""),
-                        filters=sanitized_filters,
-                        location=alt.get("location"),
-                        per_page=3,
-                    )
-                    if result["total"] > 0:
-                        tested.append({
-                            **alt,
-                            "total": result["total"],
-                            "preview": [c["name"] for c in result["preview_companies"][:3]],
-                        })
-                except Exception as e:
-                    logger.warning("Alternative search failed: %s", e)
-
-            # 2. Build retry URLs
-            retry_urls: dict[str, str] = {}
-            for i in range(len(tested)):
-                retry_urls[f"v{i}"] = f"{APP_URL}/retry/{job_id}/v{i}"
-
-            # 3. Persist alternatives in job
-            job_store.merge_job(job_id, {
-                "status": "no_results",
-                "extra": {"alternatives": tested, "original_parsed": parsed},
-            })
-
-            # 4. Send email with retry buttons
-            no_results_body = await write_no_results_email(
-                search_summary=parsed.get("notes", subject),
-                query=parsed.get("query", ""),
-                filters=parsed.get("filters", []),
-                location=parsed.get("location"),
-            )
-            no_results_html = build_no_results_email_html(
-                body_plain=no_results_body,
-                alternatives=tested,
-                retry_urls=retry_urls,
-            )
-
-            if thread_id:
-                await reply_to_thread(
-                    thread_id=thread_id,
-                    to_email=sender,
-                    body_html=no_results_html,
-                    body_text=no_results_body,
-                )
-
-            logger.info(
-                "Job %s: No results, %d alternatives found, sent to %s",
-                job_id, len(tested), sender,
-            )
-            return
-
-        payment_urls = create_checkout_sessions(
-            job_id=job_id,
-            service_type=service_type,
-            customer_email=sender,
-            total_companies=total_companies,
-        )
-        job_store.merge_job(job_id, {"payment_urls": payment_urls})
-
-        email_body = await write_preview_email(
-            total_companies=total_companies,
-            preview_names=preview_names,
-            search_summary=parsed.get("notes", subject),
-            payment_urls=payment_urls,
-            service_type=service_type,
-        )
-
-        email_plain = email_body + build_checkout_cta_plaintext(payment_urls, total_companies)
-        email_html = build_preview_email_html(email_body, payment_urls, total_companies)
-
-        if thread_id:
-            reply_result = await reply_to_thread(
-                thread_id=thread_id,
-                to_email=sender,
-                body_html=email_html,
-                body_text=email_plain,
-            )
-            if reply_result.get("error"):
-                logger.error("Job %s: Reply failed: %s", job_id, reply_result["error"])
-                job_store.merge_job(job_id, {"status": "error", "error": f"Reply failed: {reply_result['error']}"})
-                await notify_error(job_id, f"Reply failed: {reply_result['error']}")
-                return
-
-        job_store.merge_job(job_id, {"status": "offer_sent"})
+        # With only longlist active, always process directly (no menu needed)
         logger.info(
-            "Job %s: Offer sent to %s (%d companies found)",
-            job_id,
-            sender,
-            total_companies,
+            "Job %s: Processing as %s (confidence: %.2f)",
+            job_id, confidence, service_type,
         )
+        await _run_service_flow(job_id, sender, subject, parsed, thread_id, service_type)
 
     except Exception as e:
         logger.exception("Error processing email for job %s: %s", job_id, e)
         job_store.merge_job(job_id, {"status": "error", "error": str(e)})
         await notify_error(job_id, str(e))
+
+
+async def _run_service_flow(
+    job_id: str,
+    sender: str,
+    subject: str,
+    parsed: dict[str, Any],
+    thread_id: str,
+    service_type: str,
+):
+    """Core service routing logic — shared by direct processing and menu selection."""
+    total_companies = 0
+    preview_names: list[str] = []
+
+    if service_type == "longlist":
+        preview = run_preview_search(
+            query=parsed.get("query", ""),
+            filters=parsed.get("filters"),
+            location=parsed.get("location"),
+            per_page=5,
+        )
+        total_companies = preview["total"]
+        preview_names = [c["name"] for c in preview["preview_companies"]]
+        job_store.merge_job(job_id, {"preview": preview})
+
+    elif service_type == "enrichment":
+        company_list = parsed.get("company_list", [])
+        total_companies = len(company_list) if company_list else 0
+        preview_names = (company_list or [])[:5]
+
+    elif service_type == "sell_side":
+        # Sell-Side: Analyze target → define buyer groups → validate → send
+        target_url = parsed.get("target_company_url")
+        target_name = parsed.get("target_company_name")
+
+        job_store.merge_job(job_id, {"status": "analyzing"})
+        target_analysis = await analyze_target_company(url=target_url, name=target_name)
+
+        buyer_groups = await define_buyer_groups(target_analysis)
+
+        if not buyer_groups:
+            job_store.merge_job(job_id, {"status": "error", "error": "Failed to define buyer groups"})
+            logger.error("Job %s: No buyer groups generated", job_id)
+            await notify_error(job_id, "Buyer group definition failed — Claude returned empty result")
+            return
+
+        # Validate: search each group, batch-fix any with 0 results
+        buyer_groups = await validate_buyer_groups(buyer_groups, target_analysis)
+
+        total_available = sum(g.get("available", 0) for g in buyer_groups)
+
+        # Save and send buyer groups email (NO Stripe links)
+        job_store.merge_job(job_id, {
+            "status": "awaiting_selection",
+            "service_type": "sell_side",
+            "total_companies": total_available,
+            "extra": {
+                "target_analysis": target_analysis,
+                "buyer_groups": buyer_groups,
+            },
+        })
+
+        groups_body = await write_buyer_groups_email(target_analysis, buyer_groups)
+        groups_html = build_buyer_groups_email_html(groups_body, buyer_groups)
+
+        if thread_id:
+            await reply_to_thread(
+                thread_id=thread_id,
+                to_email=sender,
+                body_html=groups_html,
+                body_text=groups_body,
+            )
+
+        logger.info(
+            "Job %s: Sell-side analysis complete, %d available across %d groups, sent to %s",
+            job_id, total_available, len(buyer_groups), sender,
+        )
+        return
+
+    job_store.merge_job(
+        job_id,
+        {"total_companies": total_companies, "status": "preview_done"},
+    )
+
+    # No results → test alternatives, send follow-up with retry buttons
+    if total_companies == 0 and service_type == "longlist":
+        # 1. Generate and test alternative search parameters
+        alternatives = await suggest_search_alternatives(
+            query=parsed.get("query", ""),
+            filters=parsed.get("filters", []),
+            location=parsed.get("location"),
+            notes=parsed.get("notes", ""),
+        )
+
+        tested: list[dict[str, Any]] = []
+        for alt in alternatives[:3]:
+            try:
+                # Ensure all filter values are strings (OpenRegister API requirement)
+                sanitized_filters = []
+                for f in (alt.get("filters") or []):
+                    sf = dict(f)
+                    for k, v in sf.items():
+                        if isinstance(v, (int, float, bool)):
+                            sf[k] = str(v)
+                    sanitized_filters.append(sf)
+
+                result = run_preview_search(
+                    query=alt.get("query", ""),
+                    filters=sanitized_filters,
+                    location=alt.get("location"),
+                    per_page=3,
+                )
+                if result["total"] > 0:
+                    tested.append({
+                        **alt,
+                        "total": result["total"],
+                        "preview": [c["name"] for c in result["preview_companies"][:3]],
+                    })
+            except Exception as e:
+                logger.warning("Alternative search failed: %s", e)
+
+        # 2. Build retry URLs
+        retry_urls: dict[str, str] = {}
+        for i in range(len(tested)):
+            retry_urls[f"v{i}"] = f"{APP_URL}/retry/{job_id}/v{i}"
+
+        # 3. Persist alternatives in job
+        job_store.merge_job(job_id, {
+            "status": "no_results",
+            "extra": {"alternatives": tested, "original_parsed": parsed},
+        })
+
+        # 4. Send email with retry buttons
+        no_results_body = await write_no_results_email(
+            search_summary=parsed.get("notes", subject),
+            query=parsed.get("query", ""),
+            filters=parsed.get("filters", []),
+            location=parsed.get("location"),
+        )
+        no_results_html = build_no_results_email_html(
+            body_plain=no_results_body,
+            alternatives=tested,
+            retry_urls=retry_urls,
+        )
+
+        if thread_id:
+            await reply_to_thread(
+                thread_id=thread_id,
+                to_email=sender,
+                body_html=no_results_html,
+                body_text=no_results_body,
+            )
+
+        logger.info(
+            "Job %s: No results, %d alternatives found, sent to %s",
+            job_id, len(tested), sender,
+        )
+        return
+
+    payment_urls = create_checkout_sessions(
+        job_id=job_id,
+        service_type=service_type,
+        customer_email=sender,
+        total_companies=total_companies,
+    )
+    job_store.merge_job(job_id, {"payment_urls": payment_urls})
+
+    email_body = await write_preview_email(
+        total_companies=total_companies,
+        preview_names=preview_names,
+        search_summary=parsed.get("notes", subject),
+        payment_urls=payment_urls,
+        service_type=service_type,
+    )
+
+    email_plain = email_body + build_checkout_cta_plaintext(payment_urls, total_companies)
+    email_html = build_preview_email_html(email_body, payment_urls, total_companies)
+
+    if thread_id:
+        reply_result = await reply_to_thread(
+            thread_id=thread_id,
+            to_email=sender,
+            body_html=email_html,
+            body_text=email_plain,
+        )
+        if reply_result.get("error"):
+            logger.error("Job %s: Reply failed: %s", job_id, reply_result["error"])
+            job_store.merge_job(job_id, {"status": "error", "error": f"Reply failed: {reply_result['error']}"})
+            await notify_error(job_id, f"Reply failed: {reply_result['error']}")
+            return
+
+    job_store.merge_job(job_id, {"status": "offer_sent"})
+    logger.info(
+        "Job %s: Offer sent to %s (%d companies found)",
+        job_id,
+        sender,
+        total_companies,
+    )
 
 
 # ---------------------------------------------------------------------------
